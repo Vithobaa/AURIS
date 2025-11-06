@@ -1,6 +1,28 @@
 # AURIS
-AI Desktop personal assistance
-#first create virtual environment before installing lib and running .
-use this command for windows >> venv/Scripts/Activate.ps1 
-for those in linux >> source venv/bin/activate
-then in terminal run this command >> python -m src.main
+AURIS — AI Voice Desktop Assistant
+
+Auris is a privacy-first desktop voice assistant built in Python. It runs offline using local models (Whisper STT, Ollama LLMs), supports wake word, speaker verification (MFCC+SVM), and a modern Tkinter/ttkbootstrap UI. Torque executes desktop tasks (open apps, control volume, tell time, jokes) and can answer factual questions via Wikipedia.
+
+Features
+
+Wake word (“Hey Torque”) with sleep/active states
+
+Speaker verification: MFCC + SVM (enroll & verify flow)
+
+Hybrid intelligence
+
+Offline: local Whisper STT + local LLM via Ollama
+
+Online (optional): Wikipedia summaries for factual Q&A
+
+Natural command handling: intent router + LLM planner
+
+TTS responses (pyttsx3 / OS TTS)
+
+Modern UI (Tkinter + ttkbootstrap): status, captions, log, mic bar, hot actions
+
+Pluggable tools: open/close apps, volume, time/date, jokes, app indexing
+
+Configurable & portable: .env + JSON config
+
+TASE (planned): Torque Adaptive Setup Engine to auto-detect hardware and pick the best local LLM model
