@@ -26,3 +26,29 @@ Pluggable tools: open/close apps, volume, time/date, jokes, app indexing
 Configurable & portable: .env + JSON config
 
 TASE (planned): Torque Adaptive Setup Engine to auto-detect hardware and pick the best local LLM model
+
+AND I REQUEST YOU TO CREATE A PROJECT FOLDER LIKE THIS GIVEN BELOW:
+torque/
+├─ src/
+│  ├─ main.py                # Orchestrator (wake → auth → stt → intent → act → tts)
+│  ├─ intent_router.py       # Pattern rules + router to tools / wiki / planner
+│  ├─ whisper_listener.py    # Whisper-based STT (chunks, captions)
+│  ├─ pvporcupine.py         # Wake word detector (optional if using Whisper trigger)
+│  ├─ tts_local.py           # TTS wrapper (pyttsx3 / SAPI)
+│  ├─ system_tools.py        # Open apps, volume, time, jokes, app indexing
+│  ├─ tools/
+│  │   └─ wiki_tool.py       # Wikipedia summaries (optional)
+│  ├─ ai/
+│  │   └─ planner.py         # Ollama LLM planner (intent->tool JSON)
+│  └─ voice_auth/
+│      ├─ recorder.py        # Mic capture for enroll/verify
+│      ├─ svm_auth.py        # MFCC + SVM train/verify
+│      ├─ enroll.py          # CLI enrollment
+│      └─ enroll_ui.py       # GUI enrollment
+├─ models/                   # (kept out of git; downloaded on demand)
+├─ scripts/
+│  └─ download_models.py     # (optional) fetch models from remote
+├─ .env.example
+├─ requirements.txt
+├─ README.md
+└─ LICENSE
