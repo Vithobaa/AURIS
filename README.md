@@ -1,4 +1,4 @@
-# AURIS
+# AURIS (In progress)
 AURIS — AI Voice Desktop Assistant
 
 Auris is a privacy-first desktop voice assistant built in Python. It runs offline using local models (Whisper STT, Ollama LLMs), supports wake word, speaker verification (MFCC+SVM), and a modern Tkinter/ttkbootstrap UI. Torque executes desktop tasks (open apps, control volume, tell time, jokes) and can answer factual questions via Wikipedia.
