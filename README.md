@@ -46,4 +46,68 @@ It integrates **wake-word detection**, **speaker verification**, **offline speec
 ---
 
 ## 🧩 System Architecture
+┌──────────────┐
+│ Microphone   │
+└──────┬───────┘
+       ▼
+┌──────────────────────────┐
+│ Wake Word (Porcupine)    │
+└──────┬──────────────────┘
+       ▼
+┌──────────────────────────┐
+│ Speaker Verification     │
+│ (SVM + MFCC)             │
+└──────┬──────────────────┘
+       ▼
+┌──────────────────────────┐
+│ Speech-to-Text           │
+│ (Leopard – Offline)      │
+└──────┬──────────────────┘
+       ▼
+┌──────────────────────────┐
+│ Intent Router            │
+│ (Embeddings / Keywords)  │
+└──────┬──────────────────┘
+       ▼
+┌──────────────────────────┐
+│ Planner (Ollama LLM)     │
+└──────┬──────────────────┘
+       ▼
+┌──────────────────────────┐
+│ System Tools / TTS       │
+└──────────────────────────┘
+
+
+---
+
+## ⚙️ Installation (Developer Mode)
+
+### 1️⃣ Clone the repository
+```bash
+git clone https://github.com/Vithobaa/AURIS.git
+cd AURIS
+python -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt (if doesnt work install everything one by one)
+
+Picovoice Setup (Required)
+
+Create a free Picovoice account and obtain an access key.
+
+Add to .env:
+PORCUPINE_ACCESS_KEY=your_key_here
+PICOVOICE_LEOPARD_KEY=your_key_here
+PORCUPINE_KEYWORD_PATH=HEY-TORQUE_en_windows_v3_0_0/HEY-TORQUE_en_windows_v3_0_0.ppn
+
+Ollama Setup (Offline LLM)
+Run:
+python installer/ollama_installer.py
+This will:
+Detect system hardware
+Install Ollama
+Pull optimal local LLM
+Configure .env automatically
+
+then run auris
+>> python main.py
 
