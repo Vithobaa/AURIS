@@ -54,7 +54,6 @@ It integrates **wake-word detection**, **speaker verification**, **offline speec
 ## ⚙️ Installation (Developer Mode)
 
 ### 1️⃣ Clone the repository
-```bash
 git clone https://github.com/Vithobaa/AURIS.git
 cd AURIS
 python -m venv venv
