@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+
+# Virtual env
+venv/
+
+# Build artifacts
+build/
+dist/
+*.spec
+
+# Audio samples / sensitive data
+.voice_enroll_tmp/
+voice_auth_svm.joblib
+
+# Environment variables
+.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+
+assests
