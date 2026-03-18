@@ -1,8 +1,17 @@
+
 import os
 import time
 import numpy as np
-import pyaudio
-import noisereduce as nr
+import sounddevice as sd
+
+try:
+    import noisereduce as nr
+    # _HAS_NR = True
+    # Disable NR for speed (user requested lower latency)
+    _HAS_NR = False
+except ImportError:
+    _HAS_NR = False
+    print("[Leopard] 'noisereduce' not found. Noise reduction disabled.")
 
 from pvleopard import create
 
@@ -12,7 +21,7 @@ class LeopardRecognizer:
     Optimized Leopard Offline STT
     - Faster reaction time
     - Better accuracy via:
-        * Noise reduction
+        * Noise reduction (optional)
         * Gain normalization
         * VAD-based buffering
         * Start-padding fix
@@ -24,10 +33,10 @@ class LeopardRecognizer:
         device_index=None,
         sample_rate=16000,
         frame_ms=30,
-        start_threshold=4,        # more sensitive (previously 6)
+        start_threshold=4,        # more sensitive
         silence_threshold=3,      # slightly below start threshold
-        silence_ms=450,           # faster stop → lower latency
-        min_seconds=0.25,         # accept short commands
+        silence_ms=250,           # faster stop → lower latency
+        min_seconds=0.2,         # accept short commands
         max_seconds=6.0,          # limit long recordings
         language="en"
     ):
@@ -49,44 +58,82 @@ class LeopardRecognizer:
         if not key:
             raise RuntimeError("PICOVOICE_LEOPARD_KEY missing in .env")
 
-        self.engine = create(access_key=key)
+        self.engine = None
+        for attempt in range(3):
+            try:
+                self.engine = create(access_key=key)
+                break
+            except Exception as e:
+                print(f"[Leopard] Initialization attempt {attempt+1} failed: {e}")
+                time.sleep(0.15)
+                
+        if not self.engine:
+            raise RuntimeError("Failed to initialize Leopard engine after 3 attempts.")
 
         # ---------------------------
-        # Audio System
+        # Audio System (SoundDevice)
         # ---------------------------
-        self._pa = pyaudio.PyAudio()
-        self._stream = self._pa.open(
-            format=pyaudio.paInt16,
+        self.device_index = device_index
+        # We will create the stream on demand or keep it open?
+        # PyAudio allows explicit open. SD is similar.
+        self._stream = sd.InputStream(
+            samplerate=self.sample_rate,
             channels=1,
-            rate=sample_rate,
-            input=True,
-            frames_per_buffer=self.frame_samples,
-            input_device_index=device_index
+            dtype='int16',
+            blocksize=self.frame_samples,
+            device=self.device_index
         )
+        self._stream.start()
 
     # ============================================================
     # Helper: compute mic level (0–100)
     # ============================================================
-    def _amp_level(self, frame_bytes: bytes) -> int:
-        data = np.frombuffer(frame_bytes, dtype=np.int16).astype(np.float32)
-        amp = np.mean(np.abs(data)) / 32768.0
+    def _amp_level(self, frame_int16: np.ndarray) -> int:
+        # frame_int16 is already int16 numpy array
+        f = frame_int16.astype(np.float32) / 32768.0
+        amp = float(np.mean(np.abs(f)))  
         return int(min(1.0, amp * 3.0) * 100)
 
     # ============================================================
     # READ AUDIO UNTIL USER FINISHES SPEAKING
     # ============================================================
     def listen_once(self) -> str:
+        if self._stream is None:
+            return ""
+
         speaking = False
         silence_count = 0
         frames = 0
-        buf = bytearray()
+        buf = [] # list of numpy arrays
+
+        try:
+            # Do NOT auto-restart stream here. 
+            # If it is paused (inactive), we should respect that or throw/return.
+            if not self._stream.active:
+                # If stream is inactive, we can't read. 
+                # Should we return empty immediately?
+                # Yes, returning empty lets the loop check for typing_busy_evt.
+                return ""
+        except:
+            pass
 
         while frames < self.max_frames:
             try:
-                frame = self._stream.read(self.frame_samples, exception_on_overflow=False)
-            except OSError:
-                continue
+                # Read one frame
+                # sd read returns (data, overflow)
+                data, overflow = self._stream.read(self.frame_samples)
+                if overflow:
+                    pass
+            except Exception as e:
+                # Suppress "Stream is stopped" (PaErrorCode -9983) which happens on valid shutdown
+                if "Stream is stopped" in str(e) or "-9983" in str(e):
+                    break
+                print("[Leopard] Stream read error:", e)
+                break
 
+            # data is (frames, channels) e.g. (512, 1) result is 2D
+            frame = data.flatten() # 1D int16 array
+            
             frames += 1
 
             # UI mic level update
@@ -96,22 +143,32 @@ class LeopardRecognizer:
                 except:
                     pass
 
-            # Convert audio chunk for RMS check
-            f = np.frombuffer(frame, dtype=np.int16).astype(np.float32)
-            amp = np.mean(np.abs(f))
+            # VAD check
+            f_float = frame.astype(np.float32)
+            amp_int = np.mean(np.abs(f_float)) # mean abs of int16 values
 
+            # Scale amp to match previous PyAudio threshold logic (approx)
+            # PyAudio bytes -> frombuffer -> mean(abs) 
+            # If start_threshold=4 means int16 value ~4 (very sensitive?)
+            # Or 4%? The original code did:
+            # f = frombuffer(frame)...; amp = mean(abs(f))
+            # Wait, original code:
+            # f = np.frombuffer(frame, dtype=np.int16).astype(np.float32)
+            # amp = np.mean(np.abs(f))
+            # Yes, so 'amp' is mean absolute value of int16 samples.
+            
             # --------------------------
             # VAD START
             # --------------------------
             if not speaking:
-                if amp >= self.start_threshold:
+                if amp_int >= self.start_threshold:
                     speaking = True
-                    buf.extend(frame)
+                    buf.append(frame)
             else:
-                buf.extend(frame)
+                buf.append(frame)
 
                 # VAD STOP condition
-                if amp < self.silence_threshold:
+                if amp_int < self.silence_threshold:
                     silence_count += 1
                     if silence_count >= self.silence_frames_to_stop and frames >= self.min_frames:
                         break
@@ -125,11 +182,19 @@ class LeopardRecognizer:
         # ============================================================
         # PROCESS AUDIO CLEANING
         # ============================================================
-
-        pcm = np.frombuffer(bytes(buf), dtype=np.int16).astype(np.float32)
+        
+        # Concatenate all frames
+        if not buf:
+            return ""
+        
+        pcm = np.concatenate(buf).astype(np.float32)
 
         # Step 1: Noise Reduction (major accuracy boost)
-        pcm = nr.reduce_noise(y=pcm, sr=self.sample_rate)
+        if _HAS_NR:
+            try:
+                pcm = nr.reduce_noise(y=pcm, sr=self.sample_rate)
+            except Exception:
+                pass
 
         # Step 2: Gain Normalization (avoids too-quiet speech)
         max_val = np.max(np.abs(pcm))
@@ -171,13 +236,37 @@ class LeopardRecognizer:
 
 
     # ============================================================
+    # ============================================================
+    # ============================================================
+    # ============================================================
+    def pause(self):
+        """Pause the audio stream."""
+        try:
+            if self._stream and self._stream.active:
+                self._stream.stop()
+        except Exception:
+            pass
+
+    def resume(self):
+        """Resume the audio stream."""
+        try:
+            # Re-create stream if closed? No, stop() just pauses.
+            # But sounddevice stop() might require start() to resume.
+            if self._stream and not self._stream.active:
+                self._stream.start()
+        except Exception:
+            pass
+
     def close(self):
         try:
-            self._stream.stop_stream()
-            self._stream.close()
+            if self._stream:
+                self._stream.stop()
+                self._stream.close()
         except:
             pass
-        try:
-            self._pa.terminate()
-        except:
-            pass
+        self._stream = None
+        
+        if self.engine:
+            self.engine.delete()
+            self.engine = None
+

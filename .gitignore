@@ -24,5 +24,8 @@ voice_auth_svm.joblib
 .DS_Store
 Thumbs.db
 
+# Large Setup Files
+OllamaSetup.exe
 
-assests
+# Log files
+auris_experiment_log.csv

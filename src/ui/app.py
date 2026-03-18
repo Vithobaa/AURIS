@@ -83,7 +83,7 @@ class ChatBubble(tk.Frame):
             fg=BG_MAIN,
             wraplength=260,            # smaller wrap width
             justify="left",
-            font=("Comic Sans MS", 9)  # NEW cosmic sans font
+            font=("Segoe UI", 10)      # Clean, standard Windows font
         )
 
         self.lbl.pack()
@@ -308,9 +308,49 @@ class AssistantUI:
         inner = tk.Frame(self.canvas_outer, bg=BG_MAIN)
         inner.place(x=pad, y=pad, width=self.w - pad*2, height=self.h - pad*2)
 
-        # header
+        # Custom Layout Packing Order:
+        # 1. Input Row (Bottom)
+        # 2. EKG (Bottom, above input)
+        # 3. Header (Top)
+        # 4. Avatar (Top)
+        # 5. Wrapper (Fill Remaining)
+
+        # input row
+        input_row = tk.Frame(inner, bg=BG_MAIN)
+        input_row.pack(side="bottom", fill="x", padx=8, pady=(4,10))
+
+        self.entry = tk.Entry(input_row, bg="#001A2C", fg="white", relief="flat", insertbackground="white",
+                              font=("Segoe UI", 11))
+        self.entry.pack(side="left", fill="x", expand=True, ipady=8, padx=(0,8))
+        self.entry.bind("<Return>", lambda e: self._submit())
+        
+        # Placeholder text logic
+        def on_entry_click(event):
+            if self.entry.get() == "Type a command...":
+                self.entry.delete(0, "end")
+                self.entry.config(fg="white")
+
+        def on_focusout(event):
+            if self.entry.get() == "":
+                self.entry.insert(0, "Type a command...")
+                self.entry.config(fg="grey")
+
+        self.entry.insert(0, "Type a command...")
+        self.entry.config(fg="grey")
+        self.entry.bind('<FocusIn>', on_entry_click)
+        self.entry.bind('<FocusOut>', on_focusout)
+
+        tk.Button(input_row, text="Send", bg=CYAN_PRIMARY, fg="black", relief="flat",
+                  font=("Segoe UI", 10, "bold"), command=self._submit).pack(side="left", ipadx=12, ipady=6)
+        tk.Button(input_row, text="✖", bg="#7A2222", fg="white", relief="flat", command=self._force_stop).pack(side="left", padx=(8,0), ipadx=6, ipady=6)
+
+        # EKG mic widget (above input)
+        self.ekg = EKGWidget(inner, width=self.w - 64, height=68)
+        self.ekg.pack(side="bottom", pady=(6,8))
+
+        # header (top)
         header = tk.Frame(inner, bg=BG_MAIN)
-        header.pack(fill="x", pady=(6,4), padx=8)
+        header.pack(side="top", fill="x", pady=(6,4), padx=8)
         tk.Label(header, text=f"● {title}", fg=CYAN_PRIMARY, bg=BG_MAIN,
                  font=("Segoe UI", 18, "bold")).pack(side="left")
         self.status_var = tk.StringVar(value="Idle")
@@ -320,11 +360,11 @@ class AssistantUI:
 
         # avatar
         self.avatar = AvatarWidget(inner, size=160)
-        self.avatar.pack(pady=(4,6))
+        self.avatar.pack(side="top", pady=(4,6))
 
-        # chat area
+        # chat area (fill remaining)
         wrapper = tk.Frame(inner, bg=BG_MAIN)
-        wrapper.pack(fill="both", expand=True, padx=8, pady=(4,6))
+        wrapper.pack(side="top", fill="both", expand=True, padx=8, pady=(4,6))
 
         self.canvas = tk.Canvas(wrapper, bg=BG_MAIN, highlightthickness=0)
         self.canvas.pack(side="left", fill="both", expand=True)
@@ -343,23 +383,12 @@ class AssistantUI:
         self.msg_container.configure(padx=6)
 
         self.msg_container.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+        
+        # Mousewheel scrolling (Windows)
+        self.root.bind("<MouseWheel>", self._on_mousewheel)
 
-        # EKG mic widget
-        self.ekg = EKGWidget(inner, width=self.w - 64, height=68)
-        self.ekg.pack(pady=(6,8))
-
-        # input row
-        input_row = tk.Frame(inner, bg=BG_MAIN)
-        input_row.pack(fill="x", padx=8, pady=(4,10))
-
-        self.entry = tk.Entry(input_row, bg="#001A2C", fg="white", relief="flat", insertbackground="white",
-                              font=("Segoe UI", 11))
-        self.entry.pack(side="left", fill="x", expand=True, ipady=8, padx=(0,8))
-        self.entry.bind("<Return>", lambda e: self._submit())
-
-        tk.Button(input_row, text="Send", bg=CYAN_PRIMARY, fg="black", relief="flat",
-                  font=("Segoe UI", 10, "bold"), command=self._submit).pack(side="left", ipadx=12, ipady=6)
-        tk.Button(input_row, text="✖", bg="#7A2222", fg="white", relief="flat", command=self._force_stop).pack(side="left", padx=(8,0), ipadx=6, ipady=6)
+    def _on_mousewheel(self, event):
+        self.canvas.yview_scroll(int(-1*(event.delta/120)), "units")
 
     def _draw_glow_border(self):
         self.canvas_outer.delete("all")
@@ -388,59 +417,77 @@ class AssistantUI:
             self.root.geometry(f"{self.w}x{self.h}+{self.final_x}+{self.final_y}")
 
     # ========================
-    # Public API (compatible)
+    # Public API (compatible + THREAD SAFE)
     # ========================
     def append(self, text, is_torque=False, is_system=False):
-        sender = "system" if is_system else ("torque" if is_torque else "user")
-        b = ChatBubble(self.msg_container, text, sender, bounce=True, icon_robot_style=1, icon_user_style='B')
-        b.pack(fill="x")
-        self.root.after(30, lambda: self.canvas.yview_moveto(1.0))
+        # We wrap the actual widget creation in lambda for thread safety
+        def _do_append():
+            sender = "system" if is_system else ("torque" if is_torque else "user")
+            b = ChatBubble(self.msg_container, text, sender, bounce=True, icon_robot_style=1, icon_user_style='B')
+            b.pack(fill="x")
+            # scroll to bottom shortly after
+            self.root.after(30, lambda: self.canvas.yview_moveto(1.0))
+
+        self.root.after(0, _do_append)
 
     def set_status(self, txt):
-        try:
-            self.status_var.set(txt)
-        except Exception:
-            pass
+        def _do_status():
+            try:
+                self.status_var.set(txt)
+            except Exception:
+                pass
+        self.root.after(0, _do_status)
 
     def set_listening(self, v: bool):
-        # for compatibility; show status briefly
-        self.set_status("● Listening" if v else "● Idle")
+        # thread safe wrapper
+        def _do_list():
+            self.set_status("● Listening" if v else "● Idle")
+        self.root.after(0, _do_list)
 
     def set_speaking(self, v: bool):
-        self.avatar.set_speaking(bool(v))
-        if v:
-            self.set_status("● Speaking")
-        else:
-            self.set_status("● Idle")
+        def _do_speak():
+            self.avatar.set_speaking(bool(v))
+            if v:
+                self.set_status("● Speaking")
+            else:
+                self.set_status("● Idle")
+        self.root.after(0, _do_speak)
 
     def set_caption(self, text: str):
-        # compatibility placeholder (no caption UI)
         pass
 
     def update_mic_level(self, level):
-        try:
-            if isinstance(level, float) and 0.0 <= level <= 1.0:
-                lvl = level
-            else:
-                lvl = float(level) / 100.0
-            lvl = max(0.0, min(1.0, lvl))
-        except Exception:
-            lvl = 0.0
-        self.ekg.update_level(lvl)
+        def _do_level():
+            try:
+                if isinstance(level, float) and 0.0 <= level <= 1.0:
+                    lvl = level
+                else:
+                    lvl = float(level) / 100.0
+                lvl = max(0.0, min(1.0, lvl))
+            except Exception:
+                lvl = 0.0
+            self.ekg.update_level(lvl)
+        self.root.after(0, _do_level)
 
     # ========================
     # Input handlers
     # ========================
     def _submit(self):
         t = self.entry.get().strip()
-        if not t:
+        if not t or t == "Type a command...":
             return
         self.append(t, is_torque=False)
         self.entry.delete(0, "end")
-        try:
-            self.on_submit(t)
-        except Exception as e:
-            self.append(f"[Error] {e}", is_system=True)
+        
+        # Run processing in a thread to avoid freezing UI
+        def _process():
+            try:
+                self.on_submit(t)
+            except Exception as e:
+                self.append(f"[Error] {e}", is_system=True)
+        
+        import threading
+        threading.Thread(target=_process, daemon=True).start()
 
     def _force_stop(self):
         self.append("Force stopping session.", is_system=True)

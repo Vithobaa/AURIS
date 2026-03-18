@@ -330,5 +330,27 @@ def set_volume(user_text: str) -> str:
     value: Optional[int] = extract_volume_value(user_text)
     if value is None:
         return "What volume level should I set? (0-100)"
-    # Replace this with your real volume setter if you wire one up.
-    return f"Setting volume to {value} percent (simulated)."
+    # Windows Volume Control via pycaw
+    try:
+        import comtypes
+        comtypes.CoInitialize()
+        from comtypes import CLSCTX_ALL
+        from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+        
+        devices = AudioUtilities.GetSpeakers()
+        
+        # Check for wrapper vs raw COM
+        if hasattr(devices, "EndpointVolume"):
+            volume = devices.EndpointVolume
+        else:
+            interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+            volume = interface.QueryInterface(IAudioEndpointVolume)
+        
+        # volume.SetMasterVolumeLevelScalar(float, eventContext)
+        # val is 0.0 to 1.0
+        scalar = max(0.0, min(1.0, value / 100.0))
+        volume.SetMasterVolumeLevelScalar(scalar, None)
+        
+        return f"Volume set to {value}%."
+    except Exception as e:
+        return f"Could not set volume. Error: {e}"

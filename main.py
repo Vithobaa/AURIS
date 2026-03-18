@@ -1,5 +1,30 @@
+import csv
+from datetime import datetime
+import psutil
 
+LOG_FILE = "auris_experiment_log.csv"
+
+def log_event(trial, module, value, unit="ms"):
+    with open(LOG_FILE, "a", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            datetime.now().strftime("%H:%M:%S"),
+            trial,
+            module,
+            round(value, 4),
+            unit
+        ])
 import sys, os
+import socket
+
+def is_online(host="8.8.8.8", port=53, timeout=1.5):
+    """Check if we have an active internet connection."""
+    try:
+        socket.setdefaulttimeout(timeout)
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect((host, port))
+        return True
+    except socket.error:
+        return False
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SRC_DIR = os.path.join(BASE_DIR, "src")
@@ -21,7 +46,7 @@ from src.stt.leopard_recognizer import LeopardRecognizer
 from src.settings import load_settings
 from src.nlp_entities import extract_app_name
 from src.tts.tts_local import speak_now, stop_all_tts
-from src.ai.planner import plan
+from src.ai.planner import plan, synthesize_answer
 
 # --- Voice authentication (SVM-based) ---
 from src.voice_auth.recorder import record_seconds
@@ -35,18 +60,25 @@ from src.tools.system_tools import (
 )
 from src.tools.wifi_tools import wifi_on, wifi_off, list_wifi, connect_wifi_by_number
 
+from src.tools.web_search import search_web
+from src.tools.weather import get_weather
+from src.tools.media import media_play_pause, media_next, media_prev
+from src.tools.files import list_files, read_file
+
 # -----------------------------------------------------------
 def build_router() -> IntentRouter:
     router = IntentRouter(threshold=0.52)
 
     router.add_intent("open_app",
         ["open notepad","launch calculator","start the browser",
-         "open file explorer","open my files","start chrome","open spotify"],
+         "open file explorer","open my files","start chrome","open spotify",
+         "open browser", "launch browser"],
         open_app)
 
     router.add_intent("close_app",
         ["close chrome","quit edge","exit notepad",
-         "close visual studio code","kill spotify","stop browser"],
+         "close visual studio code","kill spotify","stop browser",
+         "close browser", "quit browser"],
         close_app)
 
     router.add_intent("rescan_apps",
@@ -92,6 +124,31 @@ def build_router() -> IntentRouter:
          ["connect to wifi", "connect wifi", "connect to network"],
          lambda _t: "")  # handled later in main
 
+    # --- WAKE WORD BYPASS (Fixes "Hey Torque" going to Ollama) ---
+    router.add_intent("wake_check",
+        ["hey torque", "torque", "hello torque", "hi torque"],
+        lambda _t: "I'm here. What do you need?")
+
+    router.add_intent("web_search",
+        ["search for", "web search", "google", "look up", "find online"],
+        lambda t: search_web(t.replace("search for","").replace("web search","").replace("google","").replace("look up","").replace("find online","").strip()))
+
+    router.add_intent("weather",
+        ["weather in", "weather for", "check weather", "forecast"],
+        lambda t: get_weather(t.replace("weather in","").replace("weather for","").replace("check weather","").replace("forecast","").strip()))
+
+    router.add_intent("media_play_pause",
+        ["play music", "pause music", "stop music", "resume music", "toggle play"],
+        media_play_pause)
+    
+    router.add_intent("media_next",
+        ["next song", "skip song", "next track", "skip track"],
+        media_next)
+
+    router.add_intent("media_prev",
+        ["previous song", "go back", "last song", "previous track"],
+        media_prev)
+
     router.build()
     return router
 
@@ -125,8 +182,12 @@ def main():
 
     shutdown_evt = threading.Event()
     force_stop_evt = threading.Event()
+    typing_busy_evt = threading.Event() # Logic lock for typed commands
     active_rec = {"obj": None}
     wake_holder = {"obj": None}
+    
+    # Keep track of the last few queries for fallback memory ("who is ceo of google" -> "then microsoft")
+    conversation_history = []
 
     # Mic helpers
     def pause_mic():
@@ -176,6 +237,11 @@ def main():
     # central sleep helper (used for both typed and spoken stop-words)
     def enter_sleep():
         try:
+             # Stop TTS for silence
+            stop_all_tts()
+        except: pass
+
+        try:
             # stop any active recorder
             r = active_rec.get("obj")
             if r:
@@ -200,7 +266,7 @@ def main():
         except Exception:
             pass
 
-    def handle_text(text: str):
+    def _handle_text_inner(text: str):
         t = text.strip()
         lower = t.lower()
 
@@ -217,18 +283,58 @@ def main():
 
         try_planner_first = looks_like_qa
 
+        # --- SMART FAST MODE (NO OLLAMA) ONLINE CHECK ---
+        online = is_online()
+        
         try:
             label, score = (None, 0.0)
             if not try_planner_first:
                 label, score = router.route(t)
             print(f"[Router] label={label} score={score:.2f}")
+            
+            # If we are ONLINE and the router couldn't confidently classify it as a local tool action,
+            # BYPASS OLLAMA ENTIRELY, use conversation history for context, and search the web.
+            if online and (try_planner_first or (label is None or score < 0.55)):
+                print("[Handler] Online Fast Mode. Bypassing planner for web search.")
+                say("Let me check...")
+                
+                # Context memory concatenation
+                if len(conversation_history) > 0:
+                    query_with_context = " ".join(conversation_history[-2:]) + " " + t
+                else:
+                    query_with_context = t
+                    
+                raw_results = search_web(query_with_context)
+                
+                # Synthesize with fast_mode=True to skip Ollama completely.
+                final_answer = synthesize_answer(t, raw_results, fast_mode=True)
+                say(final_answer)
+                
+                # Update memory
+                conversation_history.append(t)
+                if len(conversation_history) > 3:
+                    conversation_history.pop(0)
+                    
+                return
 
+            # If OFFLINE, fallback to normal Ollama processing
             use_planner = try_planner_first or (label is None or score < 0.55)
 
-            # ---------------------------- PLANNER FALLBACK ------------------------
+            # ---------------------------- HYBRID FALLBACK ------------------------
             if use_planner:
-                print("[Handler] Using planner fallback…")
+                # OFFLINE / SMART FALLBACK: Use Ollama Planner
+                print("[Handler] Ambiguous command. Asking Planner (Ollama)...")
+                
+                llm_start = time.time()
                 p = plan(t)
+                llm_end = time.time()
+
+                llm_latency = (llm_end - llm_start) * 1000
+                cpu_usage = psutil.cpu_percent(interval=1)
+                memory_usage = psutil.virtual_memory().percent
+                log_event("llm_trial", "cpu_usage", cpu_usage, "percent")
+                log_event("llm_trial", "memory_usage", memory_usage, "percent")
+                log_event("llm_trial", "llm_latency", llm_latency, "ms")
                 print("[Planner] result:", p)
 
                 if p and "tool" in p:
@@ -240,6 +346,10 @@ def main():
                         "list_apps": list_available_apps,
                         "set_volume": set_volume, "get_time": get_time,
                         "tell_joke": tell_joke,
+                        "web_search": search_web, "weather": get_weather,
+                        "media_play_pause": media_play_pause, 
+                        "media_next": media_next, "media_prev": media_prev,
+                        "list_files": list_files, "read_file": read_file,
                     }
                     fn = tool_map.get(tool)
                     if fn:
@@ -249,7 +359,17 @@ def main():
                                 say(f"Opening {app}.")
                                 fn(app)
                                 return
+                        
                         param = args.get("name") or args.get("filter") or args.get("percent") or t
+                        
+                        # --- HYBRID WEB SEARCH ---
+                        if tool == "web_search" or tool == "weather":
+                            say("Let me check that for you...")
+                            raw_results = fn(param)
+                            final_answer = synthesize_answer(t, raw_results)
+                            say(final_answer)
+                            return
+                        
                         reply = fn(param)
                         say(reply)
                         return
@@ -258,10 +378,39 @@ def main():
                     say(str(p["say"]))
                     return
 
-                say("I'm not sure what you mean.")
+                # Planner failed or returned None. If it looks like a question, try direct web search.
+                if try_planner_first:
+                    print("[Handler] Planner failed but it's a question. Forcing web search fallback.")
+                    say("Let me look that up online...")
+                    raw_results = search_web(t)
+                    final_answer = synthesize_answer(t, raw_results, fast_mode=True)
+                    say(final_answer)
+                    return
+
+                say("I see. (Offline mode)")
                 return
 
             # --------------------- ROUTER INTENTS (CONFIDENT) --------------------
+            
+            # Intent-based explicit web search (bypasses planner)
+            if label == "web_search":
+                say("Let me look that up online...")
+                query = t.replace("search for","").replace("web search","").replace("google","").replace("look up","").replace("find online","").strip()
+                
+                if len(conversation_history) > 0:
+                    query_with_context = " ".join(conversation_history[-2:]) + " " + query
+                else:
+                    query_with_context = query
+                    
+                raw_results = search_web(query_with_context)
+                final_answer = synthesize_answer(t, raw_results, fast_mode=online)
+                say(final_answer)
+                
+                conversation_history.append(query)
+                if len(conversation_history) > 3:
+                    conversation_history.pop(0)
+                    
+                return
 
             # Wi-Fi connect handler
             if label == "wifi_connect":
@@ -282,6 +431,14 @@ def main():
         except Exception as e:
             print("[Handler] ERROR:", e)
             say("Something went wrong handling that request.")
+    def handle_text(text: str):
+        # Pause mic (and block voice loop) while processing typed command
+        typing_busy_evt.set()
+        pause_mic()
+        try:
+            _handle_text_inner(text)
+        finally:
+            typing_busy_evt.clear()
 
     def on_force_stop():
         ui.append("Force stopping current session.", is_system=True)
@@ -368,12 +525,26 @@ def main():
                 if force_stop_evt.is_set() or shutdown_evt.is_set():
                     break
 
+                pipeline_start = time.time()
                 text = rec.listen_once()
+                pipeline_end = time.time()
+
+                if text:
+                    total_latency = (pipeline_end - pipeline_start) * 1000
+                    log_event("pipeline_trial", "stt_pipeline_latency", total_latency, "ms")
 
                 # immediately pause mic so Torque does not hear itself
                 pause_mic()
 
                 if not text:
+                    # If text is empty (maybe mic paused by typed command?), wait for lock
+                    while typing_busy_evt.is_set():
+                        time.sleep(0.1)
+                    
+                    # If recorder was closed while we were waiting (e.g. sleep command), exit loop
+                    if active_rec["obj"] != rec:
+                         break
+
                     # resume and continue listening
                     resume_mic()
                     continue
@@ -383,10 +554,11 @@ def main():
                 root.after(0, lambda t=text: ui.set_caption(t))
                 root.after(0, lambda t=text: ui.append(t))
 
-                # if user says a stop word while in voice session, enter sleep mode
+                # if user says a stop word while in voice session, break loop
                 if any(sw == lower or lower.startswith(sw + " ") or (" " + sw + " ") in (" " + lower + " ") for sw in STOP_WORDS):
                     root.after(0, lambda: ui.append("Sleeping…", is_system=True))
-                    enter_sleep()
+                    # DO NOT call enter_sleep() here, just break. 
+                    # The finally block will handle cleanup and restart wake listener.
                     break
 
                 try:
@@ -405,10 +577,11 @@ def main():
                 ui.set_caption("")
             ))
             # restart wake listener after voice session ends (unless shutdown)
-            start_wake_listener()
+            if not shutdown_evt.is_set():
+                start_wake_listener()
 
     # Wake handler
-    def on_wake():
+    def on_wake(audio_data=None):
         import time
         print("[MEASURE] on_wake() started at:", time.time())
         if shutdown_evt.is_set():
@@ -420,17 +593,27 @@ def main():
             except: pass
             wake_holder["obj"] = None
 
-        ui.set_status("Verifying speaker…")
-        sample = record_seconds(2.0, device_index=AUTH_DEVICE_INDEX)
+        if audio_data is not None:
+            # Seamless rolling buffer used
+            ui.set_status("Verifying speaker (Seamless)")
+            sample = audio_data
+        else:
+            # Legacy fallback
+            ui.set_status("Verifying speaker…")
+            sample = record_seconds(2.0, device_index=AUTH_DEVICE_INDEX)
 
-        import time
         t0 = time.time()
-        ok, score, thr = verify_svm(sample, VOICE_MODEL_PATH, threshold=float(os.getenv("AUTH_VERIFY_THRESHOLD", "0.55")))
+        ok, score, thr = verify_svm(sample, VOICE_MODEL_PATH, threshold=float(os.getenv("AUTH_VERIFY_THRESHOLD", "0.60")))
         t1 = time.time()
+
+        auth_latency = (t1 - t0) * 1000
+        log_event("auth_trial", "authentication_latency", auth_latency, "ms")
+        log_event("auth_trial", "auth_score", score, "prob")
+        log_event("wake_trial", "wake_trigger", 1, "event")
+        print("[MEASURE] SVM verification time:", auth_latency)
+        print(f"[Auth] score={score:.3f} thr={thr:.3f} ok={ok}")
         print("[MEASURE] SVM verification time:", t1 - t0)
 
-
-        ok, score, thr = verify_svm(sample, VOICE_MODEL_PATH, threshold=float(os.getenv("AUTH_VERIFY_THRESHOLD", "0.55")))
         print(f"[Auth] score={score:.3f} thr={thr:.3f} ok={ok}")
 
         if ok:
@@ -456,13 +639,13 @@ def main():
             if w: w.stop()
         except: pass
 
-        try:
-            r = active_rec.get("obj")
-            if r: r.close()
-        except: pass
+        # try:
+        #     r = active_rec.get("obj")
+        #     if r: r.close()
+        # except: pass
 
-        try: stop_all_tts()
-        except: pass
+        # try: stop_all_tts()
+        # except: pass
 
         try: root.quit()
         except: pass
@@ -476,4 +659,10 @@ def main():
     root.mainloop()
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        try: os._exit(0)
+        except: pass

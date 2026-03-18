@@ -118,6 +118,9 @@ class IntentRouter:
 
         u = set(self._tok(tl))
         best_label, best_score = None, 0.0
+        
+        # J.A.R.V.I.S Action Verbs
+        action_verbs = {"open", "launch", "start", "close", "quit", "exit", "kill", "stop", "play", "pause", "resume", "search", "find"}
 
         for label, exs in self.examples.items():
             # If anchors defined, require at least one
@@ -133,6 +136,19 @@ class IntentRouter:
                 inter = len(u & e)
                 # jaccard-like score
                 s = inter / (len(u | e) + 1e-9)
+                
+                # Heuristic 1: Exact phrase match boost
+                if ex in tl or (len(u) >= 2 and tl in ex):
+                    s = max(s, 0.85)
+                    
+                # Heuristic 2: Action verb prefix match
+                tl_words = tl.split()
+                ex_words = ex.split()
+                if tl_words and ex_words:
+                    kw = ex_words[0]
+                    if kw in action_verbs and tl.startswith(kw + " "):
+                        s = max(s, 0.65)
+
                 if s > score:
                     score = s
 

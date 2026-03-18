@@ -1,10 +1,9 @@
-pvporcupine
-pyaudio
+pvporcupine==3.0.1
+# pyaudio
 numpy
-pyttsx
+pyttsx3
 soundfile
 sounddevice
-vosk
 pycaw
 comtypes
 rapidfuzz
@@ -13,13 +12,11 @@ requests
 python-speech-features 
 scikit-learn
 joblib
-dotenv
-faster_whisper
-tkinter
 ttkbootstrap
-whispercpp
 pipwin
 py-cpuinfo
 python-dotenv 
 pvleopard
 noicereduce
+duckduckgo-search
+pyautogui
