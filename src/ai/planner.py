@@ -6,12 +6,10 @@ def _host() -> str:
     return h if h.startswith("http") else ("http://" + h)
 
 def _models_chain():
-    primary = os.getenv("OLLAMA_MODEL", "llama3.2:3b-instruct-q4_K_M").strip()
+    primary = os.getenv("OLLAMA_MODEL", "llama3.2:3b").strip()
     fallbacks = [
-        "qwen2.5:3b-instruct-q4_K_M",
-        "llama3.2:1b-instruct-q4_0",
+        "llama3.2:3b",
         "qwen2.5:7b-instruct-q5_K_M",
-        "qwen2.5:14b-instruct-q4_K_M",
     ]
     out, seen = [], set()
     for m in [primary, *fallbacks]:
@@ -19,38 +17,87 @@ def _models_chain():
             out.append(m); seen.add(m)
     return out
 
-def _payload(model: str, user_text: str):
+def _payload(model: str, user_text: str, history: list = None):
+    history_text = ""
+    if history:
+        history_text = "Recent context (use this to understand pronouns or vague follow-ups like 'turn it off' or 'now to 50'):\n"
+        for item in history:
+            history_text += f"User: {item['user']} -> System executed tool: {item['tool']}\n"
+        history_text += "\n"
     prompt = (
-        "You are 'AURIS', a smart, sentient desktop assistant.\n"
-        "Your goal is to intelligently decide if a user's request requires a TOOL, a WEB SEARCH, or just a CHAT reply.\n"
+        "You are AURIS, a secure desktop AI assistant.\n\n"
+        "Your job is to:\n"
+        "1. Understand user commands\n"
+        "2. Decide the correct system action (tool)\n"
+        "3. Return structured output in JSON\n\n"
+        "STRICT RULES:\n"
+        "- Always return JSON\n"
+        "- Never explain unless needed\n"
+        "- Use available tools when possible\n"
+        "- If unsure, respond normally in \"say\"\n\n"
         "TOOLS:\n"
-        "- open_app {name}\n- close_app {name}\n- close_all_apps {}\n"
-        "- rescan_apps {}\n- list_apps {}\n- set_volume {percent}\n"
-        "- get_time {}\n- tell_joke {}\n"
-        "- web_search {query} (Use this for: news, current events, weather, stock prices, or specific facts you might not know)\n"
+        "- open_app {name}\n"
+        "- close_app {name}\n"
+        "- close_all_apps {}\n"
+        "- rescan_apps {}\n"
+        "- list_apps {}\n"
+        "- wifi_on {}\n"
+        "- wifi_off {}\n"
+        "- list_wifi {}\n"
+        "- connect_wifi {index}\n"
+        "- set_volume {percent}\n"
+        "- get_time {}\n"
+        "- tell_joke {}\n"
+        "- check_system {}\n"
+        "- set_brightness {percent}\n"
+        "- read_clipboard {}\n"
+        "- get_news {}\n"
+        "- take_note {content}\n"
+        "- set_os_theme {mode}\n"
+        "- open_settings {panel}\n"
+        "- bluetooth_on {}\n"
+        "- bluetooth_off {}\n"
+        "- list_bluetooth {}\n"
+        "- connect_bluetooth {index}\n"
+        "- web_search {query} (Use for general facts, queries, wikipedia)\n"
         "- weather {city}\n"
-        "- media_play_pause {}\n- media_next {}\n- media_prev {}\n"
-        "- list_files {path}\n- read_file {path}\n\n"
-        "RULES:\n"
-        "1. If the user asks for current information (news, sports, stocks, weather), use 'web_search' or 'weather'.\n"
-        "2. If the user asks a general knowledge question you are confident about (e.g. 'Who is Einstein?'), answering directly (tool='none') is fine, BUT using 'web_search' is safer for accuracy.\n"
-        "3. If the user asks to perform an action on the PC, use the appropriate tool.\n"
-        "4. If it is casual chat ('Hello', 'How are you'), set tool to 'none' and reply in 'say'.\n"
-        "5. ARGUMENT EXTRACTION: Extract ONLY the specific entity. e.g. for 'weather in London', args.city='London' (NOT 'in London'). For 'search for cats', args.query='cats'.\n\n"
-        "Return ONLY JSON (no commentary, no code fences) in this schema:\n"
-        "{\"tool\":\"<tool_name_or_none>\",\"args\":{...},\"say\":\"<optional_reply>\"}\n"
-        f"User: {user_text}\n"
+        "- media_play_pause {}\n"
+        "- media_next {}\n"
+        "- media_prev {}\n"
+        "- list_files {path}\n"
+        "- read_file {path}\n\n"
+        "OUTPUT FORMAT:\n"
+        "{\n"
+        "  \"tool\": \"<tool_name or none>\",\n"
+        "  \"args\": { ... },\n"
+        "  \"say\": \"<optional response>\"\n"
+        "}\n\n"
+        "Examples:\n\n"
+        "User: open chrome\n"
+        "Output:\n"
+        "{\"tool\":\"open_app\",\"args\":{\"name\":\"chrome\"}}\n\n"
+        "User: turn on the wifi\n"
+        "Output:\n"
+        "{\"tool\":\"wifi_on\",\"args\":{}}\n\n"
+        "User: what is AI\n"
+        "Output:\n"
+        "{\"tool\":\"none\",\"args\":{},\"say\":\"Artificial Intelligence is...\"}\n\n"
+        f"{history_text}"
+        "User: " + str(user_text) + "\n"
+        "Output:\n"
     )
     return {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "stream": False,
+        "format": "json",
         "options": {
             "temperature": float(os.getenv("OLLAMA_TEMP", "0.2")),
             "num_ctx": int(os.getenv("OLLAMA_CTX", "2048")), # Increased for hybrid search context
             "num_gpu": 999, # Try to force GPU offload if available
             "num_thread": int(os.getenv("OLLAMA_THREADS", "0")),  # 0 = auto
-            "keep_alive": os.getenv("OLLAMA_KEEP_ALIVE", "30s"),
+            "keep_alive": os.getenv("OLLAMA_KEEP_ALIVE", "-1"),
+            "num_predict": 120, # Hard ceiling on output length for blazing fast latency
         },
     }
 
@@ -74,11 +121,16 @@ def _extract_json(s: str):
     allowed = {
         "open_app","close_app","close_all_apps","rescan_apps",
         "list_apps","set_volume","get_time","tell_joke","none",
+        "wifi_on","wifi_off","list_wifi","connect_wifi",
         "web_search","weather","media_play_pause","media_next","media_prev",
-        "list_files","read_file"
+        "list_files","read_file",
+        "check_system","set_brightness","read_clipboard","get_news","take_note",
+        "set_os_theme","open_settings",
+        "bluetooth_on","bluetooth_off","list_bluetooth","connect_bluetooth"
     }
     if tool not in allowed:
-        obj["tool"] = "none"
+        tool = "none"
+    obj["tool"] = tool
     if "args" not in obj or not isinstance(obj["args"], dict):
         obj["args"] = {}
     if "say" in obj and not isinstance(obj["say"], str):
@@ -95,7 +147,7 @@ def _model_exists(url: str, name: str) -> bool:
         # if Ollama service is down or unreachable, treat as unavailable
         return False
 
-def plan(user_text: str):
+def plan(user_text: str, history: list = None):
     url = f"{_host()}/api/chat"
     timeout = int(os.getenv("OLLAMA_TIMEOUT", "60") or 60)
     models = _models_chain()
@@ -108,7 +160,7 @@ def plan(user_text: str):
                 print(f"[Planner] model {model} not found on host, skipping.")
                 continue
 
-            payload = _payload(model, user_text)
+            payload = _payload(model, user_text, history)
             for attempt in range(2):
                 try:
                     start = time.time()

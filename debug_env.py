@@ -1,29 +1,34 @@
 import sys
 import os
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+SRC_DIR = os.path.join(BASE_DIR, "src")
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
 
-print("--- DEBUG INFO ---")
-print(f"CWD: {os.getcwd()}")
-print(f"sys.executable: {sys.executable}")
-print(f"sys.version: {sys.version}")
-print("sys.path:")
-for p in sys.path:
-    print(f"  {p}")
+from dotenv import load_dotenv
+load_dotenv()
 
-print("\nImport Checks:")
-try:
-    import numpy
-    print(f"numpy: {numpy.__file__}")
-except ImportError as e:
-    print(f"numpy failed: {e}")
+from src.ai.planner import _models_chain, _model_exists
+import requests
 
-try:
-    import pyautogui
-    print(f"pyautogui: {pyautogui.__file__}")
-except ImportError as e:
-    print(f"pyautogui failed: {e}")
+def debug():
+    url = "http://127.0.0.1:11434"
+    print("OLLAMA_MODEL from env:", os.getenv("OLLAMA_MODEL"))
+    models = _models_chain()
+    print("Models Chain:", models)
+    try:
+        r = requests.get(f"{url}/api/tags", timeout=6)
+        r.raise_for_status()
+        tags = r.json().get("models", [])
+        print("\nAll Ollama Tag Names:")
+        for t in tags:
+            print(f"- '{t.get('name')}'")
+    except Exception as e:
+        print("Error fetching tags:", e)
 
-try:
-    import duckduckgo_search
-    print(f"duckduckgo_search: {duckduckgo_search.__file__}")
-except ImportError as e:
-    print(f"duckduckgo_search failed: {e}")
+    print("\nModel Exists Check:")
+    for m in models:
+        print(f"'{m}':", _model_exists(url, m))
+
+if __name__ == "__main__":
+    debug()

@@ -53,101 +53,19 @@ from src.voice_auth.recorder import record_seconds
 from src.voice_auth.svm_auth import verify_svm
 from src.voice_auth.enroll_ui import run_enrollment
 
-# --- Tools ---
-from src.tools.system_tools import (
-    open_app, close_app, rescan_apps, close_all_apps,
-    list_available_apps, set_volume, get_time, tell_joke
-)
-from src.tools.wifi_tools import wifi_on, wifi_off, list_wifi, connect_wifi_by_number
-
-from src.tools.web_search import search_web
-from src.tools.weather import get_weather
-from src.tools.media import media_play_pause, media_next, media_prev
-from src.tools.files import list_files, read_file
+GLOBAL_TOOL_MAP = {}
 
 # -----------------------------------------------------------
 def build_router() -> IntentRouter:
     router = IntentRouter(threshold=0.52)
-
-    router.add_intent("open_app",
-        ["open notepad","launch calculator","start the browser",
-         "open file explorer","open my files","start chrome","open spotify",
-         "open browser", "launch browser"],
-        open_app)
-
-    router.add_intent("close_app",
-        ["close chrome","quit edge","exit notepad",
-         "close visual studio code","kill spotify","stop browser",
-         "close browser", "quit browser"],
-        close_app)
-
-    router.add_intent("rescan_apps",
-        ["rescan apps","scan apps","rebuild app index","refresh apps"],
-        rescan_apps)
-
-    router.add_intent("close_all_apps",
-        ["close all the apps","close everything you opened",
-         "close all apps","shut everything you started"],
-        close_all_apps)
-
-    router.add_intent("list_apps",
-        ["what apps can you open","what can you open","list apps",
-         "show installed apps","which apps can you launch"],
-        list_available_apps)
-
-    router.add_intent("get_time",
-        ["what time is it","tell me the time","current time",
-         "what day is it","date today"],
-        get_time)
-
-    router.add_intent("tell_joke",
-        ["tell me a joke","make me laugh","joke please","say a joke"],
-        tell_joke)
-
-    router.add_intent("set_volume",
-        ["set volume to 50%","volume 30","increase volume to 80",
-         "decrease volume to 20"],
-        set_volume)
-    router.add_intent("wifi_on",
-         ["turn on wifi", "enable wifi", "wifi on"],
-         lambda _t: wifi_on())
-
-    router.add_intent("wifi_off",
-         ["turn off wifi", "disable wifi", "wifi off"],
-         lambda _t: wifi_off())
-
-    router.add_intent("wifi_list",
-         ["list wifi", "scan wifi", "show wifi", "wifi networks","list out the wifi"],
-         lambda _t: list_wifi())
-
-    router.add_intent("wifi_connect",
-         ["connect to wifi", "connect wifi", "connect to network"],
-         lambda _t: "")  # handled later in main
-
+    
     # --- WAKE WORD BYPASS (Fixes "Hey Torque" going to Ollama) ---
     router.add_intent("wake_check",
         ["hey torque", "torque", "hello torque", "hi torque"],
         lambda _t: "I'm here. What do you need?")
 
-    router.add_intent("web_search",
-        ["search for", "web search", "google", "look up", "find online"],
-        lambda t: search_web(t.replace("search for","").replace("web search","").replace("google","").replace("look up","").replace("find online","").strip()))
-
-    router.add_intent("weather",
-        ["weather in", "weather for", "check weather", "forecast"],
-        lambda t: get_weather(t.replace("weather in","").replace("weather for","").replace("check weather","").replace("forecast","").strip()))
-
-    router.add_intent("media_play_pause",
-        ["play music", "pause music", "stop music", "resume music", "toggle play"],
-        media_play_pause)
-    
-    router.add_intent("media_next",
-        ["next song", "skip song", "next track", "skip track"],
-        media_next)
-
-    router.add_intent("media_prev",
-        ["previous song", "go back", "last song", "previous track"],
-        media_prev)
+    from src.tools.registry import load_all_tools
+    load_all_tools(router, GLOBAL_TOOL_MAP)
 
     router.build()
     return router
@@ -188,6 +106,11 @@ def main():
     
     # Keep track of the last few queries for fallback memory ("who is ceo of google" -> "then microsoft")
     conversation_history = []
+    
+    def log_history(u_text: str, t_name: str):
+        conversation_history.append({"user": u_text, "tool": t_name})
+        if len(conversation_history) > 6:
+            conversation_history.pop(0)
 
     # Mic helpers
     def pause_mic():
@@ -283,50 +206,59 @@ def main():
 
         try_planner_first = looks_like_qa
 
-        # --- SMART FAST MODE (NO OLLAMA) ONLINE CHECK ---
         online = is_online()
         
         try:
-            label, score = (None, 0.0)
-            if not try_planner_first:
-                label, score = router.route(t)
+            # 1. ALWAYS RUN ML CLASSIFIER FIRST (Hybrid Intent Architecture)
+            label, score = router.route(t)
             print(f"[Router] label={label} score={score:.2f}")
             
-            # If we are ONLINE and the router couldn't confidently classify it as a local tool action,
-            # BYPASS OLLAMA ENTIRELY, use conversation history for context, and search the web.
-            if online and (try_planner_first or (label is None or score < 0.55)):
-                print("[Handler] Online Fast Mode. Bypassing planner for web search.")
-                say("Let me check...")
+            ML_THRESHOLD = 0.60
+
+            if score >= ML_THRESHOLD and label is not None:
+                # --- HIGH CONFIDENCE: DIRECT ML EXECUTION ---
+                print(f"[Handler] High confidence ML match ({score:.2f} >= {ML_THRESHOLD}). Direct execution.")
                 
-                # Context memory concatenation
-                if len(conversation_history) > 0:
-                    query_with_context = " ".join(conversation_history[-2:]) + " " + t
-                else:
-                    query_with_context = t
+                # Intent-based explicit web search (bypasses planner)
+                if label == "web_search":
+                    say("Let me look that up online...")
+                    query = t.replace("search for","").replace("web search","").replace("google","").replace("look up","").replace("find online","").strip()
                     
-                raw_results = search_web(query_with_context)
-                
-                # Synthesize with fast_mode=True to skip Ollama completely.
-                final_answer = synthesize_answer(t, raw_results, fast_mode=True)
-                say(final_answer)
-                
-                # Update memory
-                conversation_history.append(t)
-                if len(conversation_history) > 3:
-                    conversation_history.pop(0)
-                    
+                    if len(conversation_history) > 0:
+                        query_with_context = " ".join([h.get("user", "") for h in conversation_history[-2:] if isinstance(h, dict)]) + " " + query
+                    else:
+                        query_with_context = query
+                        
+                    raw_results = search_web(query_with_context)
+                    final_answer = synthesize_answer(t, raw_results, fast_mode=online)
+                    say(final_answer)
+                    log_history(t, "web_search")
+                    return
+
+                # Wi-Fi connect handler
+                if label == "wifi_connect":
+                    import re
+                    nums = re.findall(r"\b(\d+)\b", t)
+                    if nums:
+                        reply = connect_wifi_by_number(int(nums[0]))
+                        say(reply)
+                    else:
+                        say("Say a number after 'connect'.")
+                    log_history(t, "wifi_connect")
+                    return
+
+                # Normal router intents
+                reply = router.handlers[label](t)
+                say(str(reply))
+                log_history(t, str(label))
                 return
 
-            # If OFFLINE, fallback to normal Ollama processing
-            use_planner = try_planner_first or (label is None or score < 0.55)
-
-            # ---------------------------- HYBRID FALLBACK ------------------------
-            if use_planner:
-                # OFFLINE / SMART FALLBACK: Use Ollama Planner
-                print("[Handler] Ambiguous command. Asking Planner (Ollama)...")
+            else:
+                # --- LOW CONFIDENCE: LLM FALLBACK ---
+                print("[Handler] Complex command (Low ML confidence). Asking Planner (LLM)...")
                 
                 llm_start = time.time()
-                p = plan(t)
+                p = plan(t, history=conversation_history)
                 llm_end = time.time()
 
                 llm_latency = (llm_end - llm_start) * 1000
@@ -340,27 +272,49 @@ def main():
                 if p and "tool" in p:
                     tool = p["tool"].strip()
                     args = p.get("args", {}) or {}
-                    tool_map = {
-                        "open_app": open_app, "close_app": close_app,
-                        "close_all_apps": close_all_apps, "rescan_apps": rescan_apps,
-                        "list_apps": list_available_apps,
-                        "set_volume": set_volume, "get_time": get_time,
-                        "tell_joke": tell_joke,
-                        "web_search": search_web, "weather": get_weather,
-                        "media_play_pause": media_play_pause, 
-                        "media_next": media_next, "media_prev": media_prev,
-                        "list_files": list_files, "read_file": read_file,
-                    }
+                    tool_map = GLOBAL_TOOL_MAP
+                    
+                    if tool == "none":
+                        if p.get("say"):
+                            say(str(p["say"]))
+                        else:
+                            say("I didn't quite catch that.")
+                        log_history(t, "none")
+                        return
+                        
                     fn = tool_map.get(tool)
                     if fn:
-                        if tool == "open_app":
+                        if tool in ["open_app", "close_app"]:
                             app = args.get("name") or extract_app_name(t)
                             if app:
-                                say(f"Opening {app}.")
+                                say(f"Opening {app}." if tool == "open_app" else f"Closing {app}.")
                                 fn(app)
                                 return
+                                
+                        elif tool in ["connect_wifi", "connect_bluetooth"]:
+                            import re
+                            match = re.search(r"connect.*?(\d+)", t)
+                            if match:
+                                idx=int(match.group(1))
+                                say(f"Connecting to device {idx}.")
+                                say(str(fn(idx)))
+                            else:
+                                if tool == "connect_bluetooth":
+                                    say(str(fn("")))
+                                else:
+                                    say("Which network number to connect to?")
+                            log_history(t, str(tool))
+                            return
+                            
+                        # Handle functions that take no arguments
+                        if tool in ["wifi_on", "wifi_off", "list_wifi", "rescan_apps", "close_all_apps", "media_play_pause", "media_next", "media_prev", "get_time", "tell_joke", "check_system", "read_clipboard", "get_news", "bluetooth_on", "bluetooth_off", "list_bluetooth", "connect_bluetooth"]:
+                            reply = fn()
+                            if reply:
+                                say(str(reply))
+                            log_history(t, str(tool))
+                            return
                         
-                        param = args.get("name") or args.get("filter") or args.get("percent") or t
+                        param = str(args.get("name") or args.get("filter") or args.get("percent") or args.get("query") or args.get("city") or args.get("path") or t)
                         
                         # --- HYBRID WEB SEARCH ---
                         if tool == "web_search" or tool == "weather":
@@ -368,18 +322,22 @@ def main():
                             raw_results = fn(param)
                             final_answer = synthesize_answer(t, raw_results)
                             say(final_answer)
+                            log_history(t, str(tool))
                             return
                         
                         reply = fn(param)
-                        say(reply)
+                        if reply:
+                            say(str(reply))
+                        log_history(t, str(tool))
                         return
 
                 if p and "say" in p:
                     say(str(p["say"]))
+                    log_history(t, "none")
                     return
 
                 # Planner failed or returned None. If it looks like a question, try direct web search.
-                if try_planner_first:
+                if looks_like_qa:
                     print("[Handler] Planner failed but it's a question. Forcing web search fallback.")
                     say("Let me look that up online...")
                     raw_results = search_web(t)
@@ -389,44 +347,6 @@ def main():
 
                 say("I see. (Offline mode)")
                 return
-
-            # --------------------- ROUTER INTENTS (CONFIDENT) --------------------
-            
-            # Intent-based explicit web search (bypasses planner)
-            if label == "web_search":
-                say("Let me look that up online...")
-                query = t.replace("search for","").replace("web search","").replace("google","").replace("look up","").replace("find online","").strip()
-                
-                if len(conversation_history) > 0:
-                    query_with_context = " ".join(conversation_history[-2:]) + " " + query
-                else:
-                    query_with_context = query
-                    
-                raw_results = search_web(query_with_context)
-                final_answer = synthesize_answer(t, raw_results, fast_mode=online)
-                say(final_answer)
-                
-                conversation_history.append(query)
-                if len(conversation_history) > 3:
-                    conversation_history.pop(0)
-                    
-                return
-
-            # Wi-Fi connect handler
-            if label == "wifi_connect":
-                import re
-                nums = re.findall(r"\b(\d+)\b", t)
-                if nums:
-                    reply = connect_wifi_by_number(int(nums[0]))
-                    say(reply)
-                else:
-                    say("Say a number after 'connect'.")
-                return
-
-            # Normal router intents
-            reply = router.handlers[label](t)
-            say(str(reply))
-            return
 
         except Exception as e:
             print("[Handler] ERROR:", e)

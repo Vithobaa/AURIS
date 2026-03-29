@@ -61,3 +61,8 @@ def get_weather(city: str) -> str:
         
     except Exception as e:
         return f"Could not fetch weather for {city}. ({e})"
+
+
+def register(router, tool_map):
+    router.add_intent("weather", ["weather in", "weather for", "check weather", "forecast"], lambda t: get_weather(t.replace("weather in","").replace("weather for","").replace("check weather","").replace("forecast","").strip()))
+    tool_map.update({ "weather": get_weather })

@@ -34,3 +34,8 @@ def search_web(query: str) -> str:
             
     print("[WebSearch] All backends failed or returned null. Yielding to internal LLM.")
     return ""
+
+
+def register(router, tool_map):
+    router.add_intent("web_search", ["search for", "web search", "google", "look up", "find online"], lambda t: search_web(t.replace("search for","").replace("web search","").replace("google","").replace("look up","").replace("find online","").strip()))
+    tool_map.update({ "web_search": search_web })

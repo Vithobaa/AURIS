@@ -20,3 +20,6 @@ pvleopard
 noicereduce
 duckduckgo-search
 pyautogui
+sentence-transformers
+torch
+wmi

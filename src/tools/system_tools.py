@@ -354,3 +354,21 @@ def set_volume(user_text: str) -> str:
         return f"Volume set to {value}%."
     except Exception as e:
         return f"Could not set volume. Error: {e}"
+
+
+def register(router, tool_map):
+    router.add_intent("open_app", ["open notepad", "launch calculator", "start the browser", "open file explorer", "open my files", "start chrome", "open spotify", "open browser", "launch browser"], open_app)
+    router.add_intent("close_app", ["close chrome", "quit edge", "exit notepad", "close visual studio code", "kill spotify", "stop browser", "close browser", "quit browser"], close_app)
+    router.add_intent("rescan_apps", ["rescan apps", "scan apps", "rebuild app index", "refresh apps"], rescan_apps)
+    router.add_intent("close_all_apps", ["close all the apps", "close everything you opened", "close all apps", "shut everything you started"], close_all_apps)
+    router.add_intent("list_apps", ["what apps can you open", "what can you open", "list apps", "show installed apps", "which apps can you launch"], list_available_apps)
+    router.add_intent("set_volume", ["set volume to 50%", "volume 30", "increase volume to 80", "decrease volume to 20", "set the volume to 100", "volume to 10", "now to 50"], set_volume)
+    router.add_intent("get_time", ["what time is it", "tell me the time", "current time", "what day is it", "date today"], get_time)
+    router.add_intent("tell_joke", ["tell me a joke", "make me laugh", "joke please", "say a joke"], tell_joke)
+
+    tool_map.update({
+        "open_app": open_app, "close_app": close_app,
+        "rescan_apps": rescan_apps, "close_all_apps": close_all_apps,
+        "list_apps": list_available_apps, "set_volume": set_volume,
+        "get_time": get_time, "tell_joke": tell_joke
+    })

@@ -182,13 +182,13 @@ class IntentRouter:
         return self._route_keywords(user_text)
 
     def handle(self, user_text: str) -> str:
+        """Run the handler safely, returning a default message on failures."""
         import time
         start = time.time()
         label, score = self.route(user_text)
         end = time.time()
         print("[MEASURE] Router latency:", end - start)
-        """Run the handler safely, returning a default message on failures."""
-        label, score = self.route(user_text)
+        
         if label is None:
             return "I'm not sure what you mean. (Enable a local embedding model to improve routing.)"
         fn = self.handlers.get(label)

@@ -34,3 +34,7 @@ def read_file(path: str) -> str:
         return f"Content of {os.path.basename(p)}:\n{content}..."
     except Exception as e:
         return f"Error reading file: {e}"
+
+
+def register(router, tool_map):
+    tool_map.update({ "list_files": list_files, "read_file": read_file })
