@@ -79,6 +79,15 @@ def main():
     VOICE_MODEL_PATH = os.getenv("VOICE_MODEL_PATH", "voice_auth_svm.joblib").strip()
     AUTH_DEVICE_INDEX = int(os.getenv("AUTH_DEVICE_INDEX", "0"))
 
+    # Initialize global Tcl interpreter root early
+    root = tk.Tk()
+    root.withdraw() # hide it during wizards
+    try:
+        import ttkbootstrap as tb
+        _ = tb.Style("darkly")
+    except Exception as e:
+        print("[Setup] Could not load ttkbootstrap theme globally:", e)
+
     # === FIRST-RUN SETUP WIZARD ===
     
     # 1. Voice Enrollment
@@ -105,7 +114,7 @@ def main():
         load_dotenv(override=True)
 
     # Build UI
-    root = tk.Tk()
+    root.deiconify() # Reveal it
     from src.ui.app import AssistantUI
 
     router = build_router()

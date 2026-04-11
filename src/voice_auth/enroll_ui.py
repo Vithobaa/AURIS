@@ -31,8 +31,7 @@ class _EnrollWindow:
         self.tmpdir = Path(".voice_enroll_tmp")
         self.tmpdir.mkdir(exist_ok=True)
 
-        self.root = tb.Window(themename="darkly")
-        self.root.title("AURIS – Voice Match Setup")
+        self.root = tb.Toplevel(title="AURIS – Voice Match Setup")
         self.root.geometry("640x380")
         self.root.resizable(False, False)
 
@@ -77,7 +76,7 @@ class _EnrollWindow:
         self.root.protocol("WM_DELETE_WINDOW", self._cancel)
 
     def run(self):
-        self.root.mainloop()
+        self.root.wait_window()
         return self._done
 
     def _say(self, text: str):

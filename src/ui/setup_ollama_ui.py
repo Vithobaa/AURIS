@@ -13,8 +13,7 @@ import ollama_installer as ol
 
 class _OllamaSetupWindow:
     def __init__(self):
-        self.root = tb.Window(themename="darkly")
-        self.root.title("AURIS – AI Brain Setup")
+        self.root = tb.Toplevel(title="AURIS – AI Brain Setup")
         self.root.geometry("600x380")
         self.root.resizable(False, False)
 
@@ -45,7 +44,7 @@ class _OllamaSetupWindow:
     def run(self):
         # Start installation loop in background to not freeze GUI
         threading.Thread(target=self._install_thread, daemon=True).start()
-        self.root.mainloop()
+        self.root.wait_window()
         return self._done
 
     def _skip(self):
