@@ -4,7 +4,8 @@ import time
 from pathlib import Path
 from typing import Optional, List
 import tkinter as tk
-from tkinter import ttk
+import ttkbootstrap as tb
+from ttkbootstrap.constants import *
 import soundfile as sf
 from .recorder import record_seconds
 from .svm_auth import enroll_svm, SR
@@ -30,70 +31,43 @@ class _EnrollWindow:
         self.tmpdir = Path(".voice_enroll_tmp")
         self.tmpdir.mkdir(exist_ok=True)
 
-        self.root = tk.Tk()
-        self.root.title("AURIS – MFCC-SVM Voice Match Setup")
-        self.root.geometry("560x340")
+        self.root = tb.Window(themename="darkly")
+        self.root.title("AURIS – Voice Match Setup")
+        self.root.geometry("640x380")
         self.root.resizable(False, False)
 
-        # ---------------- DARK THEME CONFIGURATION ----------------
-        bg_col = "#121212"
-        fg_col = "#E0E0E0"
-        accent = "#00B4D8"
-        btn_bg = "#1E1E1E"
-
-        self.root.configure(bg=bg_col)
-        
-        style = ttk.Style(self.root)
-        style.theme_use('clam')
-        
-        style.configure("TFrame", background=bg_col)
-        style.configure("TLabel", background=bg_col, foreground=fg_col)
-        style.configure("Header.TLabel", font=("Segoe UI", 16, "bold"), foreground=accent)
-        style.configure("Sub.TLabel", font=("Segoe UI", 10), foreground="#A0A0A0")
-        style.configure("Status.TLabel", font=("Segoe UI", 12, "bold"), foreground="#FFFFFF")
-        style.configure("Phrase.TLabel", font=("Segoe UI", 16, "italic"), foreground="#FFD700")
-        style.configure("Condition.TLabel", font=("Segoe UI", 11, "bold"), foreground="#FF6060")
-        
-        style.configure("TButton", font=("Segoe UI", 11), background=btn_bg, foreground=fg_col,
-                        borderwidth=0, focuscolor=accent, lightcolor=bg_col, darkcolor=bg_col)
-        style.map("TButton", background=[("active", "#2A2A2A"), ("disabled", "#121212")],
-                  foreground=[("disabled", "#555555")])
-        style.configure("Horizontal.TProgressbar", background=accent, troughcolor=btn_bg, 
-                        bordercolor=bg_col, lightcolor=accent, darkcolor=accent)
-
         # ---------------- BUILD UI ----------------
-        main_frame = ttk.Frame(self.root, padding="20 20 20 20")
-        main_frame.pack(fill="both", expand=True)
+        main_frame = tb.Frame(self.root, padding=25)
+        main_frame.pack(fill=BOTH, expand=True)
 
-        ttk.Label(main_frame, text="Secure MFCC-SVM Enrollment", style="Header.TLabel").pack(pady=(0, 5))
+        tb.Label(main_frame, text="Secure Voice Enrollment", font=("Segoe UI", 20, "bold"), bootstyle="info").pack(pady=(0, 10))
 
-        self.info = ttk.Label(main_frame,
+        self.info = tb.Label(main_frame,
             text=(f"We will capture {self.samples_count} vocal profiles across varied noise conditions.\n"
                   f"Please read the phrases aloud when prompted."),
-            justify="center", style="Sub.TLabel")
-        self.info.pack(pady=(0, 5))
+            justify="center", font=("Segoe UI", 11), bootstyle="secondary")
+        self.info.pack(pady=(0, 10))
 
-        self.condition_display = ttk.Label(main_frame, text="Condition: Loading...", style="Condition.TLabel")
+        self.condition_display = tb.Label(main_frame, text="Condition: Loading...", font=("Segoe UI", 12, "bold"), bootstyle="danger")
         self.condition_display.pack(pady=(0, 5))
 
-        self.phrase_display = ttk.Label(main_frame, text="", style="Phrase.TLabel")
-        self.phrase_display.pack(pady=(5, 5))
+        self.phrase_display = tb.Label(main_frame, text="", font=("Segoe UI", 18, "italic"), bootstyle="warning")
+        self.phrase_display.pack(pady=(10, 10))
 
-        self.status = ttk.Label(main_frame, text="Click Start to begin calibration.", style="Status.TLabel")
-        self.status.pack(pady=(5, 10))
+        self.status = tb.Label(main_frame, text="Click Start to begin calibration.", font=("Segoe UI", 12, "bold"), bootstyle="light")
+        self.status.pack(pady=(5, 15))
 
-        self.progress = ttk.Progressbar(main_frame, orient="horizontal",
-                                        length=500, mode="determinate", maximum=self.samples_count)
-        self.progress.pack(pady=(0, 15))
+        self.progress = tb.Progressbar(main_frame, bootstyle="info-striped", mode="determinate", maximum=self.samples_count)
+        self.progress.pack(fill=X, pady=(0, 20), padx=20)
 
-        btns = ttk.Frame(main_frame)
+        btns = tb.Frame(main_frame)
         btns.pack()
         
-        self.start_btn = ttk.Button(btns, text=" START ENROLLMENT ", command=self._start)
-        self.start_btn.pack(side="left", padx=10, ipadx=10, ipady=4)
+        self.start_btn = tb.Button(btns, text=" START ENROLLMENT ", bootstyle="success", command=self._start)
+        self.start_btn.pack(side=LEFT, padx=10)
         
-        self.cancel_btn = ttk.Button(btns, text=" CANCEL ", command=self._cancel)
-        self.cancel_btn.pack(side="left", padx=10, ipadx=10, ipady=4)
+        self.cancel_btn = tb.Button(btns, text=" CANCEL ", bootstyle="danger-outline", command=self._cancel)
+        self.cancel_btn.pack(side=LEFT, padx=10)
 
         self._canceled = False
         self._done = False
@@ -129,7 +103,7 @@ class _EnrollWindow:
 
     def _start(self):
         self.start_btn.config(state="disabled")
-        self._say(f"Starting MFCC-SVM enrollment for {self.samples_count} samples.")
+        self._say(f"Starting Voice setup. {self.samples_count} samples.")
         self.root.after(50, self._step_recording)
 
     def _step_recording(self):
@@ -164,13 +138,13 @@ class _EnrollWindow:
             self._set_status(msg)
             self._say(msg)
             self._set_phrase("(Waiting...)")
-            self.cancel_btn.config(text=" RESUME ", command=self._resume_recording)
+            self.cancel_btn.config(text=" RESUME ", bootstyle="warning", command=self._resume_recording)
             return
 
         phrase_to_read = self.phrases[(self.idx - 1) % len(self.phrases)]
         
         self._set_phrase("...")
-        self._set_status(f"Sample {self.idx}/{self.samples_count} starting in 1 sec…")
+        self._set_status(f"Sample {self.idx}/{self.samples_count} starts in 1 sec…")
         self._countdown(1.0)
         if self._canceled: return
         
@@ -188,15 +162,15 @@ class _EnrollWindow:
         self.root.after(50, self._step_recording)
 
     def _resume_recording(self):
-        self.cancel_btn.config(text=" CANCEL ", command=self._cancel)
+        self.cancel_btn.config(text=" CANCEL ", bootstyle="danger-outline", command=self._cancel)
         self.root.after(50, self._step_recording)
         
     def _finish_enrollment(self):
-        self._set_status("Training MFCC-SVM Model (This may take a moment)…")
+        self._set_status("Training Secure Voice Model (Please wait)…")
         self.root.update_idletasks()
         try:
             enroll_svm(self._wavs, self.model_path)
-            self._set_status("Enrollment complete. MFCC-SVM ready.")
+            self._set_status("Enrollment complete. Welcome to AURIS.")
             self._say("Enrollment complete.")
             self._done = True
         except Exception as e:

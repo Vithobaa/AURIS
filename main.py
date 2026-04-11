@@ -79,9 +79,11 @@ def main():
     VOICE_MODEL_PATH = os.getenv("VOICE_MODEL_PATH", "voice_auth_svm.joblib").strip()
     AUTH_DEVICE_INDEX = int(os.getenv("AUTH_DEVICE_INDEX", "0"))
 
-    # Auto-enroll if SVM missing
+    # === FIRST-RUN SETUP WIZARD ===
+    
+    # 1. Voice Enrollment
     if not os.path.exists(VOICE_MODEL_PATH):
-        print("[Auth] No voice model found. Starting automatic enrollment...")
+        print("[Setup] No voice model found. Starting automatic enrollment...")
         run_enrollment(
             model_path=VOICE_MODEL_PATH,
             samples_count=int(os.getenv("AUTH_ENROLL_SAMPLES", "5")),
@@ -89,8 +91,18 @@ def main():
             device_index=AUTH_DEVICE_INDEX,
             speak_fn=speak_now,
         )
-        print("[Auth] Enrollment finished, model saved.")
+        print("[Setup] Enrollment finished, model saved.")
         time.sleep(1.0)
+        
+    # 2. Ollama Graphical Setup
+    if not os.getenv("OLLAMA_MODEL"):
+        print("[Setup] Ollama config missing. Launching AI Brain Setup...")
+        from src.ui.setup_ollama_ui import run_ollama_setup_ui
+        run_ollama_setup_ui()
+        time.sleep(1.0)
+        # Reload environment variables freshly after installation
+        from dotenv import load_dotenv
+        load_dotenv(override=True)
 
     # Build UI
     root = tk.Tk()
