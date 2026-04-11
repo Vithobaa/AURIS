@@ -114,7 +114,6 @@ def main():
         load_dotenv(override=True)
 
     # Build UI
-    root.deiconify() # Reveal it
     from src.ui.app import AssistantUI
 
     router = build_router()
@@ -403,6 +402,7 @@ def main():
         ui.set_status("Ready — listening for wake word: 'torque'")
 
     ui = AssistantUI(root, on_submit=handle_text, title=assistant_name, on_force_stop=on_force_stop)
+    root.deiconify() # Reveal the window safely after overrideredirect is configured
     ui.set_status("Ready — listening for wake word: 'torque' (Leopard STT)")
     ui.set_listening(True)
     say("Ready and listening for torque. Using Leopard offline STT.")
