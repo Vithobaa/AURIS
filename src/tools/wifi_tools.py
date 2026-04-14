@@ -71,9 +71,9 @@ def list_wifi():
     if not _last_scan:
         return f"Unable to scan Wi-Fi networks. Windows reported: {result}"
 
-    out = ["Available Wi-Fi Networks:"]
+    out = ["📶  Wi-Fi Networks"]
     for i, ssid in enumerate(_last_scan, 1):
-        out.append(f"{i}. {ssid}")
+        out.append(f"  {i}.  {ssid}")
 
     return "\n".join(out)
 

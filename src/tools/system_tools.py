@@ -103,6 +103,28 @@ def list_available_apps(_: str = "") -> str:
         return f"I can open {total} apps: {listing}."
 
 
+BROWSER_KEYWORDS = [
+    "chrome", "firefox", "edge", "opera", "brave", "safari",
+    "internet explorer", "chromium", "vivaldi", "tor browser",
+    "yandex", "maxthon", "waterfox", "palemoon", "pale moon",
+    "epic browser", "slimjet", "iridium"
+]
+
+def list_browsers(_: str = "") -> str:
+    """Return a list of browser apps found in the app index."""
+    _ensure_index()
+    apps = _APPS or {}
+    found = [
+        key for key in apps.keys()
+        if any(b in key.lower() for b in BROWSER_KEYWORDS)
+    ]
+    if not found:
+        return "I couldn't find any browsers in my app index. Try saying 'rescan apps' first."
+    listing = ", ".join(sorted(found))
+    return f"I found {len(found)} browser(s) installed: {listing}."
+
+
+
 JOKES = [
     "Why do programmers prefer dark mode? Because light attracts bugs!",
     "I would tell you a UDP joke, but you might not get it.",
@@ -362,6 +384,18 @@ def register(router, tool_map):
     router.add_intent("rescan_apps", ["rescan apps", "scan apps", "rebuild app index", "refresh apps"], rescan_apps)
     router.add_intent("close_all_apps", ["close all the apps", "close everything you opened", "close all apps", "shut everything you started"], close_all_apps)
     router.add_intent("list_apps", ["what apps can you open", "what can you open", "list apps", "show installed apps", "which apps can you launch"], list_available_apps)
+    router.add_intent("list_browsers", [
+        "what browsers do i have",
+        "what browsers are installed",
+        "list browsers",
+        "show me my browsers",
+        "which browsers do i have installed",
+        "what browser apps are installed",
+        "list installed browsers",
+        "show installed browsers",
+        "which browser is installed on my system",
+        "what web browsers are on my computer",
+    ], list_browsers)
     router.add_intent("set_volume", ["set volume to 50%", "volume 30", "increase volume to 80", "decrease volume to 20", "set the volume to 100", "volume to 10", "now to 50"], set_volume)
     router.add_intent("get_time", ["what time is it", "tell me the time", "current time", "what day is it", "date today"], get_time)
     router.add_intent("tell_joke", ["tell me a joke", "make me laugh", "joke please", "say a joke"], tell_joke)
@@ -369,6 +403,8 @@ def register(router, tool_map):
     tool_map.update({
         "open_app": open_app, "close_app": close_app,
         "rescan_apps": rescan_apps, "close_all_apps": close_all_apps,
-        "list_apps": list_available_apps, "set_volume": set_volume,
+        "list_apps": list_available_apps, "list_browsers": list_browsers,
+        "set_volume": set_volume,
         "get_time": get_time, "tell_joke": tell_joke
     })
+

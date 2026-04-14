@@ -57,7 +57,7 @@ def select_model(hw):
 # -----------------------------
 # Ensure Ollama installed
 # -----------------------------
-def ensure_ollama_installed():
+def ensure_ollama_installed(cancel_check=None):
     try:
         subprocess.check_output("ollama --version", shell=True)
         print("[Installer] Ollama is already installed.")
@@ -73,8 +73,22 @@ def ensure_ollama_installed():
 
         print("[Installer] Downloading Ollama installer...")
         import requests
-        r = requests.get(url)
-        exe_path.write_bytes(r.content)
+        try:
+            with requests.get(url, stream=True, timeout=30) as r:
+                r.raise_for_status()
+                with open(exe_path, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=65536):
+                        if cancel_check and cancel_check():
+                            print("[Installer] Download cancelled.")
+                            return False
+                        if chunk:
+                            f.write(chunk)
+        except Exception as e:
+            print(f"[Installer] Download failed: {e}")
+            return False
+
+        if cancel_check and cancel_check():
+            return False
 
         print("[Installer] Running installer...")
         subprocess.call(f'"{exe_path}" /quiet', shell=True)

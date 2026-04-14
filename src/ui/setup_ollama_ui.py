@@ -34,7 +34,7 @@ class _OllamaSetupWindow:
         btns = tb.Frame(main_frame)
         btns.pack(pady=10)
 
-        self.skip_btn = tb.Button(btns, text=" Skip (Online Mode Only) ", bootstyle="danger-outline", command=self._skip)
+        self.skip_btn = tb.Button(btns, text=" Skip / Not Now ", bootstyle="danger-outline", command=self._skip)
         self.skip_btn.pack(side=LEFT, padx=10)
 
         self._done = False
@@ -49,7 +49,8 @@ class _OllamaSetupWindow:
 
     def _skip(self):
         self._canceled = True
-        try: self.root.destroy()
+        try: 
+            self.root.destroy()
         except Exception: pass
 
     def _set_status(self, text, style="warning"):
@@ -79,10 +80,12 @@ class _OllamaSetupWindow:
 
             # Step 2: Install Ollama if missing
             self._set_status("Checking Ollama installation...", "warning")
-            if not ol.ensure_ollama_installed():
+            if not ol.ensure_ollama_installed(cancel_check=lambda: self._canceled):
+                if self._canceled: return
                 self._set_status("Failed to install Ollama.", "danger")
                 return
 
+            if self._canceled: return
             self._set_status("Starting AI Engine...", "info")
             ol.start_ollama_service()
             import time

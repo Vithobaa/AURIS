@@ -123,7 +123,10 @@ def main():
     typing_busy_evt = threading.Event() # Logic lock for typed commands
     active_rec = {"obj": None}
     wake_holder = {"obj": None}
-    
+
+    # Voice authentication gate — text commands only allowed after voice auth is granted
+    voice_auth_granted = threading.Event()
+
     # Keep track of the last few queries for fallback memory ("who is ceo of google" -> "then microsoft")
     conversation_history = []
     
@@ -171,6 +174,50 @@ def main():
         ui.set_speaking(True)
         try:
             speak_now(text)
+        except Exception as e:
+            print("[TTS] speak_now failed:", e)
+        finally:
+            ui.set_speaking(False)
+            resume_mic()
+
+    # Tools that return long lists — show in UI but only SPEAK a short summary
+    DISPLAY_ONLY_TOOLS = {
+        "list_files":      "Here are the files.",
+        "find_files":      "Here are the search results.",
+        "list_wifi":       "Here are the available Wi-Fi networks.",
+        "list_bluetooth":  "Here are the nearby Bluetooth devices.",
+        "list_browsers":   "Here are your installed browsers.",
+        "list_apps":       "Here are the apps I can open.",
+        "find_duplicates": None,   # None = use first sentence of reply
+    }
+
+    def _brief(reply: str) -> str:
+        """Extract a short spoken summary from a long reply."""
+        s = (reply or "").split('\n')[0].split(' — ')[0].split(', ')[0].strip()
+        return (s[:80] + "." if not s.endswith('.') else s[:80]) if s else "Done."
+
+    def say_brief(full_text: str, spoken: str):
+        """Split full_text on newlines and post each line as its own chat bubble.
+        Only the short spoken summary is spoken aloud — no file/network names read out."""
+        if shutdown_evt.is_set():
+            return
+        full_text = (full_text or "").strip()
+        spoken    = (spoken or "").strip()
+        if not full_text:
+            return
+        pause_mic()
+
+        # Post each line as its own bubble with a tiny stagger so they appear in order
+        lines = [ln for ln in full_text.split("\n") if ln.strip()]
+        for i, line in enumerate(lines):
+            delay_ms = i * 80   # 80 ms apart so they cascade nicely
+            root.after(delay_ms, lambda l=line: ui.append(l.strip(), is_torque=True))
+
+        # Speak only the short summary (after all bubbles scheduled)
+        ui.set_speaking(True)
+        try:
+            if spoken:
+                speak_now(spoken)
         except Exception as e:
             print("[TTS] speak_now failed:", e)
         finally:
@@ -269,7 +316,11 @@ def main():
 
                 # Normal router intents
                 reply = router.handlers[label](t)
-                say(str(reply))
+                if label in DISPLAY_ONLY_TOOLS:
+                    spoken = DISPLAY_ONLY_TOOLS[label] or _brief(str(reply))
+                    say_brief(str(reply), spoken)
+                else:
+                    say(str(reply))
                 log_history(t, str(label))
                 return
 
@@ -298,7 +349,11 @@ def main():
                         if p.get("say"):
                             say(str(p["say"]))
                         else:
-                            say("I didn't quite catch that.")
+                            # Planner returned tool=none but gave no answer.
+                            # Use LLM internal knowledge to answer (works for factual Q&A).
+                            print("[Handler] tool=none but no 'say'. Asking LLM from internal knowledge...")
+                            answer = synthesize_answer(t, "")   # empty context → internal knowledge
+                            say(answer if answer else "I'm not sure about that.")
                         log_history(t, "none")
                         return
                         
@@ -327,15 +382,36 @@ def main():
                             return
                             
                         # Handle functions that take no arguments
-                        if tool in ["wifi_on", "wifi_off", "list_wifi", "rescan_apps", "close_all_apps", "media_play_pause", "media_next", "media_prev", "get_time", "tell_joke", "check_system", "read_clipboard", "get_news", "bluetooth_on", "bluetooth_off", "list_bluetooth", "connect_bluetooth"]:
+                        if tool in ["wifi_on", "wifi_off", "list_wifi", "rescan_apps", "close_all_apps", "media_play_pause", "media_next", "media_prev", "get_time", "tell_joke", "check_system", "read_clipboard", "get_news", "bluetooth_on", "bluetooth_off", "list_bluetooth", "connect_bluetooth", "list_browsers", "list_apps"]:
                             reply = fn()
                             if reply:
                                 say(str(reply))
                             log_history(t, str(tool))
                             return
-                        
+
+                        # File management tools — pass full user text so they can extract paths/names
+                        FILE_TEXT_TOOLS = {
+                            "list_files", "find_files", "move_file", "copy_file",
+                            "delete_file", "rename_file", "file_info",
+                            "organize_folder", "find_duplicates", "open_folder",
+                            "read_file",
+                        }
+                        if tool in FILE_TEXT_TOOLS:
+                            # For long operations, announce upfront
+                            if tool in ("organize_folder", "find_duplicates"):
+                                say("Sure, working on it…")
+                            reply = fn(t)
+                            if reply:
+                                if tool in DISPLAY_ONLY_TOOLS:
+                                    spoken = DISPLAY_ONLY_TOOLS[tool] or _brief(str(reply))
+                                    say_brief(str(reply), spoken)
+                                else:
+                                    say(str(reply))
+                            log_history(t, str(tool))
+                            return
+
                         param = str(args.get("name") or args.get("filter") or args.get("percent") or args.get("query") or args.get("city") or args.get("path") or t)
-                        
+
                         # --- HYBRID WEB SEARCH ---
                         if tool == "web_search" or tool == "weather":
                             say("Let me check that for you...")
@@ -344,7 +420,7 @@ def main():
                             say(final_answer)
                             log_history(t, str(tool))
                             return
-                        
+
                         reply = fn(param)
                         if reply:
                             say(str(reply))
@@ -372,6 +448,11 @@ def main():
             print("[Handler] ERROR:", e)
             say("Something went wrong handling that request.")
     def handle_text(text: str):
+        # Gate: only allow text commands after voice authentication is granted
+        if not voice_auth_granted.is_set():
+            ui.append("⚠ Voice authentication required. Say 'Hey Torque' to authenticate first.", is_system=True)
+            return
+
         # Pause mic (and block voice loop) while processing typed command
         typing_busy_evt.set()
         pause_mic()
@@ -379,6 +460,13 @@ def main():
             _handle_text_inner(text)
         finally:
             typing_busy_evt.clear()
+            resume_mic()
+            # If this was a TYPED command (not from an active voice session),
+            # automatically start a voice session so the user can speak without
+            # needing to say "Hey Torque" again.
+            if active_rec.get("obj") is None and not shutdown_evt.is_set():
+                threading.Thread(target=voice_session, daemon=True).start()
+
 
     def on_force_stop():
         ui.append("Force stopping current session.", is_system=True)
@@ -403,6 +491,9 @@ def main():
 
     ui = AssistantUI(root, on_submit=handle_text, title=assistant_name, on_force_stop=on_force_stop)
     root.deiconify() # Reveal the window safely after overrideredirect is configured
+    root.lift()
+    root.attributes('-topmost', True)
+    root.after(100, lambda: root.attributes('-topmost', False))
     ui.set_status("Ready — listening for wake word: 'torque' (Leopard STT)")
     ui.set_listening(True)
     say("Ready and listening for torque. Using Leopard offline STT.")
@@ -437,9 +528,29 @@ def main():
             )
             wake_holder["obj"] = w
             w.start()
+            print("[WAKE] Listener started.")
         except Exception as e:
             print("[WAKE] start failed:", e)
             ui.append("Wake listener failed to start.", is_system=True)
+
+    def _wake_watchdog():
+        """Periodically checks if the wake listener is alive; restarts if it died."""
+        while not shutdown_evt.is_set():
+            time.sleep(2.0)
+            if shutdown_evt.is_set():
+                break
+            # Only watchdog when NOT in a voice session
+            if active_rec.get("obj") is not None:
+                continue
+            w = wake_holder.get("obj")
+            if w is None:
+                continue  # intentionally stopped (e.g. during on_wake)
+            thread = getattr(w, "_thread", None)
+            if thread is not None and not thread.is_alive():
+                print("[WAKE] Watchdog: listener thread died — restarting.")
+                start_wake_listener()
+
+    threading.Thread(target=_wake_watchdog, daemon=True, name="wake-watchdog").start()
 
     # Voice session
     def voice_session():
@@ -512,6 +623,10 @@ def main():
             except: pass
             active_rec["obj"] = None
 
+            # Revoke voice auth when session ends — text form locked again
+            voice_auth_granted.clear()
+            root.after(0, lambda: ui.set_text_input_locked(True, "Voice session ended — say 'Hey Torque' to re-authenticate."))
+
             root.after(0, lambda: (
                 ui.set_listening(False),
                 ui.set_status("Ready — listening for wake word: 'torque'"),
@@ -560,10 +675,15 @@ def main():
         if ok:
             ui.append(f"Access granted (score={score:.2f}).", is_system=True)
             say("Access granted.")
+            # Grant voice auth — unlock text form too
+            voice_auth_granted.set()
+            root.after(0, lambda: ui.set_text_input_locked(False))
             threading.Thread(target=voice_session, daemon=True).start()
         else:
             ui.append(f"Access denied (score={score:.2f}).", is_system=True)
             say("Access denied.")
+            voice_auth_granted.clear()
+            root.after(0, lambda: ui.set_text_input_locked(True, "Access denied — say 'Hey Torque' to try again."))
             start_wake_listener()
         
 

@@ -32,9 +32,9 @@ def list_bluetooth(_: str = "") -> str:
     if not _last_scan_bt:
         return "No discoverable devices found."
         
-    out = ["Found Bluetooth Devices:"]
+    out = ["🔵  Bluetooth Devices"]
     for i, dev in enumerate(_last_scan_bt, 1):
-        out.append(f"{i}. {dev}")
+        out.append(f"  {i}.  {dev}")
     return "\n".join(out)
 
 def connect_bluetooth(user_text: str = "") -> str:

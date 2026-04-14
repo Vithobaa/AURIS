@@ -1,510 +1,350 @@
-# src/ui/app.py
+# src/ui/app.py  — AURIS UI v6  (Reference Match Build)
 import math
 import tkinter as tk
-import time
 
-# ==========================
-# Theme
-# ==========================
-BG_MAIN        = "#044163"
-CYAN_PRIMARY   = "#00E1FF"
-CYAN_MED       = "#34EEFF"
-CYAN_SOFT      = "#6FEFFF"
+# ── Design Tokens (Reference Image Match) ─────────────────────────────────────
+BG_MAIN        = "#004163"
+BG_BUBBLE      = "#002238"
+CYAN_PRIMARY   = "#00EEFF"
+CYAN_DIM       = "#008899"
+TEXT_WHITE     = "#FFFFFF"
+BTN_RED        = "#7A2222"
+BTN_CYAN       = "#00E3FF"
 
-USER_BUBBLE    = "#002238"
-AI_BUBBLE      = "#00324D"
-SYS_BUBBLE     = "#1E3A4D"
-
-# ==========================
-# Utilities
-# ==========================
+# ── Helpers ───────────────────────────────────────────────────────────────────
 def lerp_color(hex_a, hex_b, t):
-    """Interpolate between two hex colors. t in [0,1]."""
-    a = int(hex_a.lstrip("#"), 16)
-    b = int(hex_b.lstrip("#"), 16)
-    ar, ag, ab = (a >> 16) & 0xFF, (a >> 8) & 0xFF, a & 0xFF
-    br, bg, bb = (b >> 16) & 0xFF, (b >> 8) & 0xFF, b & 0xFF
-    rr = int(ar + (br - ar) * t)
-    rg = int(ag + (bg - ag) * t)
-    rb = int(ab + (bb - ab) * t)
-    return f"#{rr:02x}{rg:02x}{rb:02x}"
+    try:
+        a = int(hex_a.lstrip("#"), 16)
+        b = int(hex_b.lstrip("#"), 16)
+        ar, ag, ab_ = (a >> 16) & 0xFF, (a >> 8) & 0xFF, a & 0xFF
+        br, bg, bb  = (b >> 16) & 0xFF, (b >> 8) & 0xFF, b & 0xFF
+        return (f"#{int(ar+(br-ar)*t):02x}"
+                f"{int(ag+(bg-ag)*t):02x}"
+                f"{int(ab_+(bb-ab_)*t):02x}")
+    except: return hex_a
 
-# ==========================
-# Chat bubble with icon + fade-in + slide
-# ==========================
+# ── Match Style Chat Bubble ───────────────────────────────────────────────────
 class ChatBubble(tk.Frame):
-    def __init__(self, master, text, sender="user", bounce=True, icon_robot_style=1, icon_user_style='B'):
+    def __init__(self, master, text, sender="user", wrap=260):
         super().__init__(master, bg=BG_MAIN)
-        self.sender = sender
-        self.text = text
-        self.bounce = bool(bounce)
-        self.icon_robot_style = icon_robot_style
-        self.icon_user_style = icon_user_style
+        
+        self.row = tk.Frame(self, bg=BG_MAIN)
+        self.row.pack(fill="x", pady=6, padx=12)
 
-        # choose colors and side
-        if sender == "user":
-            bubble_color = USER_BUBBLE
-            side = "right"
-            icon_side = "right"
-        elif sender == "torque":
-            bubble_color = AI_BUBBLE
-            side = "left"
-            icon_side = "left"
+        if sender == "torque":
+            # Robot icon on the left
+            self._make_icon(self.row, "robot").pack(side="left", anchor="n", padx=(0, 8))
+            bubble = tk.Frame(self.row, bg=BG_BUBBLE, padx=12, pady=10)
+            bubble.pack(side="left", padx=(0, 40))
+        elif sender == "user":
+            # User icon on the right
+            self._make_icon(self.row, "user").pack(side="right", anchor="n", padx=(8, 0))
+            bubble = tk.Frame(self.row, bg=BG_BUBBLE, padx=12, pady=10)
+            bubble.pack(side="right", padx=(40, 0))
         else:
-            bubble_color = SYS_BUBBLE
-            side = "left"
-            icon_side = "left"
+            bubble = tk.Frame(self.row, bg=BG_MAIN, padx=12, pady=4)
+            bubble.pack(side="left")
 
-        # row contains icon + bubble (so icon left for AI, right for user)
-        row = tk.Frame(self, bg=BG_MAIN)
-        row.pack(fill="x", pady=6, padx=6)  # <— Added left/right padding
-
-
-        # For left side: icon -> bubble; for right: bubble -> icon
-        if icon_side == "left":
-            icon = self._make_icon(row, sender)
-            icon.pack(side="left", padx=(4, 6))
-
-            bubble = tk.Frame(row, bg=bubble_color, padx=8, pady=6)
-
-            bubble.pack(side="left", padx=(6, 200 if self.bounce else 6))
-        else:
-            bubble = tk.Frame(row, bg=bubble_color, padx=12, pady=8)
-            bubble.pack(side="right", padx=(200 if self.bounce else 6, 6))
-            icon = self._make_icon(row, sender)
-            icon.pack(side="right", padx=(6, 4))
-
-
-        # text label (starts invisible color, will fade to white)
         self.lbl = tk.Label(
-            bubble,
-            text=self.text,
-            bg=bubble_color,
-            fg=BG_MAIN,
-            wraplength=260,            # smaller wrap width
-            justify="left",
-            font=("Segoe UI", 10)      # Clean, standard Windows font
+            bubble, text=text, bg=bubble.cget("bg"), fg=BG_MAIN, # Start invisible
+            font=("Segoe UI", 10), wraplength=wrap, justify="left"
         )
-
         self.lbl.pack()
 
-        # tail
-        tail = tk.Canvas(row, width=14, height=14, bg=BG_MAIN, highlightthickness=0)
-        if side == "right":
-            tail.pack(side="right", padx=(0,6))
-            tail.create_polygon(0,7, 14,0, 14,14, fill=bubble_color, outline=bubble_color)
-        else:
-            tail.pack(side="left", padx=(6,0))
-            tail.create_polygon(14,7, 0,0, 0,14, fill=bubble_color, outline=bubble_color)
+        self._fade_val = 0
+        self.after(10, self._fade_in)
 
-        # animation state
-        self._fade_step = 0
-        self._fade_steps = 12
-        self._slide_step = 0
-        self._slide_steps = 12
-        self._bubble_widget = bubble
-        # start animations
-        self.after(10, self._animate_step)
-
-    def _make_icon(self, parent, sender):
-        """Create and return a small Canvas icon for sender.
-           Robot style 1: boxy robot head (chosen by user). User style B: minimal rounded user.
-        """
-        c = tk.Canvas(parent, width=36, height=36, bg=BG_MAIN, highlightthickness=0)
-        if sender == "torque":
-            # Robot boxy style (style 1)
-            # head rectangle
-            c.create_rectangle(6,8,30,26, outline=CYAN_PRIMARY, width=2, fill="")
-            # eyes
-            c.create_oval(10,12,14,16, fill=CYAN_PRIMARY, outline=CYAN_PRIMARY)
-            c.create_oval(22,12,26,16, fill=CYAN_PRIMARY, outline=CYAN_PRIMARY)
-            # mouth (line)
-            c.create_line(12,22,24,22, fill=CYAN_PRIMARY, width=2)
-            # small antenna
-            c.create_line(18,6,18,8, fill=CYAN_PRIMARY, width=2)
-        elif sender == "user":
-            # Minimal rounded user (style B)
-            # head circle
-            c.create_oval(10,6,26,22, outline=USER_BUBBLE, width=2, fill=USER_BUBBLE)
-            # body (rounded rectangle / semicircle)
-            c.create_rectangle(8,20,28,30, outline=USER_BUBBLE, width=1, fill=USER_BUBBLE)
+    def _make_icon(self, parent, kind):
+        c = tk.Canvas(parent, width=32, height=32, bg=BG_MAIN, highlightthickness=0)
+        if kind == "robot":
+            # Robot Icon from Image
+            c.create_rectangle(6, 10, 26, 24, outline=CYAN_PRIMARY, width=2)
+            c.create_line(10, 16, 14, 16, fill=CYAN_PRIMARY, width=2)
+            c.create_line(18, 16, 22, 16, fill=CYAN_PRIMARY, width=2)
+            c.create_line(16, 10, 16, 6,  fill=CYAN_PRIMARY, width=1)
+            c.create_oval(14, 4, 18, 8,   outline=CYAN_PRIMARY)
         else:
-            # system: small neutral circle
-            c.create_oval(8,8,28,28, outline=CYAN_MED, width=2, fill=CYAN_MED)
+            # User Icon from Image
+            c.create_oval(10, 4, 22, 16, fill=BG_BUBBLE, outline=BG_BUBBLE)
+            c.create_arc(4, 16, 28, 32, start=0, extent=180, fill=BG_BUBBLE)
         return c
 
-    def _animate_step(self):
-        # fade text color from BG_MAIN -> white
-        if self._fade_step <= self._fade_steps:
-            t = self._fade_step / self._fade_steps
-            color = lerp_color(BG_MAIN, "#ffffff", t)
-            try:
-                self.lbl.configure(fg=color)
-            except Exception:
-                pass
-            self._fade_step += 1
+    def update_wraplength(self, canvas_w):
+        try:
+            new_wrap = max(140, int(canvas_w * 0.58))
+            self.lbl.configure(wraplength=new_wrap)
+        except: pass
 
-        # slide/bounce by reducing initial padding
-        if self._slide_step <= self._slide_steps:
-            t = self._slide_step / self._slide_steps
-            ease = 1 - (1 - t) ** 2  # ease-out
-            offset = int((1 - ease) * 200)
-            side = self._bubble_widget.pack_info().get("side", "left")
-            if side == "right":
-                self._bubble_widget.pack_configure(padx=(offset, 6))
-            else:
-                self._bubble_widget.pack_configure(padx=(6, offset))
-            self._slide_step += 1
+    def _fade_in(self):
+        if self._fade_val <= 10:
+            target = TEXT_WHITE if self.lbl.master.cget("bg") == BG_BUBBLE else CYAN_PRIMARY
+            col = lerp_color(BG_MAIN, target, self._fade_val / 10)
+            try: self.lbl.configure(fg=col)
+            except: pass
+            self._fade_val += 1
+            self.after(20, self._fade_in)
+        else:
+            final_col = TEXT_WHITE if self.lbl.master.cget("bg") == BG_BUBBLE else CYAN_PRIMARY
+            try: self.lbl.configure(fg=final_col)
+            except: pass
 
-        if self._fade_step <= self._fade_steps or self._slide_step <= self._slide_steps:
-            self.after(24, self._animate_step)
-
-# ==========================
-# Avatar
-# ==========================
+# ── Multi-Ring Avatar ──────────────────────────────────────────────────────────
 class AvatarWidget(tk.Canvas):
-    def __init__(self, master, size=150):
+    def __init__(self, master, size=110):
         super().__init__(master, width=size, height=size, bg=BG_MAIN, highlightthickness=0)
-        self.size = size
+        self.view_size = size
         self.speaking = False
         self.pulse = 0.0
-        self.after(40, self._animate)
+        self.after(40, self._tick)
 
-    def set_speaking(self, v: bool):
+    def set_speaking(self, v):
         self.speaking = bool(v)
 
-    def _animate(self):
-        self.delete("all")
-        cx = cy = self.size // 2
-        base_r = self.size * 0.36
+    def _tick(self):
+        try:
+            self.delete("all")
+            cx = cy = self.view_size // 2
+            self.pulse += 0.15 if self.speaking else 0.06
+            
+            # 5-Layer Concentric Rings
+            for i in range(5):
+                alpha = 0.9 - (i * 0.18)
+                col = lerp_color(BG_MAIN, CYAN_PRIMARY, alpha)
+                amp = (0.22 if self.speaking else 0.04) * math.sin(self.pulse + i*0.4)
+                r = (self.view_size * 0.15) + (i * 6) + (self.view_size * amp)
+                self.create_oval(cx-r, cy-r, cx+r, cy+r, outline=col, width=1)
+            
+            # Double Core
+            self.create_oval(cx-4, cy-4, cx+4, cy+4, fill=CYAN_PRIMARY, outline="")
+            self.create_oval(cx-8, cy-8, cx+8, cy+8, outline=CYAN_PRIMARY, width=1)
+            
+            self.after(36, self._tick)
+        except: pass
 
-        # layered glow rings
-        for i in range(6):
-            t = i / 5
-            col = lerp_color(CYAN_MED, BG_MAIN, 0.35 + 0.65 * t)
-            r = base_r + i * 3
-            self.create_oval(cx - r, cy - r, cx + r, cy + r, outline=col, width=1)
-
-        # pulse core
-        if self.speaking:
-            self.pulse += 0.28
-            scale = 1 + 0.32 * abs(math.sin(self.pulse))
-        else:
-            self.pulse += 0.07
-            scale = 1 + 0.06 * math.sin(self.pulse)
-
-        core_r = int(self.size * 0.16 * scale)
-        for i in range(4):
-            t = i / 3
-            ccol = lerp_color(CYAN_PRIMARY, CYAN_MED, t)
-            rr = int(core_r * (1 - 0.12 * i))
-            self.create_oval(cx - rr, cy - rr, cx + rr, cy + rr, outline=ccol, width=2 if i == 0 else 1)
-
-        self.after(36, self._animate)
-
-# ==========================
-# EKG waveform (glow)
-# ==========================
+# ── Layered EKG Wave ───────────────────────────────────────────────────────────
 class EKGWidget(tk.Canvas):
-    def __init__(self, master, width=420, height=64):
-        super().__init__(master, width=width, height=height, bg=BG_MAIN, highlightthickness=0)
-        self.width = width
-        self.height = height
-        self.buffer = [0.0] * (self.width // 4)
+    def __init__(self, master, height=48):
+        super().__init__(master, height=height, bg=BG_MAIN, highlightthickness=0)
+        self.current_w = 400
+        self.view_height = height
+        self.buf = [0.0] * 64
         self.tick = 0
         self.level = 0.0
+        self.bind("<Configure>", self._on_configure)
         self.after(36, self._run)
+
+    def _on_configure(self, event):
+        self.current_w = max(event.width, 10)
+        new_len = max(20, self.current_w // 6)
+        if len(self.buf) != new_len:
+            self.buf = [0.0] * new_len
 
     def update_level(self, lvl):
-        try:
-            if isinstance(lvl, float) and 0.0 <= lvl <= 1.0:
-                self.level = lvl
-            else:
-                v = float(lvl)
-                self.level = max(0.0, min(1.0, v / 100.0))
-        except Exception:
-            self.level = 0.0
+        try: self.level = max(0.0, min(1.0, float(lvl) / 100.0 if float(lvl) > 1.0 else float(lvl)))
+        except: self.level = 0.0
 
     def _run(self):
-        self.tick += 1
-        spike = 0.0
-        if self.level > 0.35 and (self.tick % 8 == 0):
-            spike = 0.8 * self.level
-        sample = min(1.0, self.level * 0.9 + spike + 0.06 * math.sin(self.tick * 0.6))
-        self.buffer.pop(0)
-        self.buffer.append(sample)
-        self._draw()
-        self.after(36, self._run)
+        try:
+            self.tick += 1
+            spike = 0.8 * self.level if (self.level > 0.35 and self.tick % 7 == 0) else 0.0
+            val = min(1.0, self.level * 0.7 + spike + 0.08 * math.sin(self.tick * 0.6))
+            self.buf.pop(0)
+            self.buf.append(max(0.0, val))
+            self._draw()
+            self.after(32, self._run)
+        except: pass
 
     def _draw(self):
+        w, h = self.current_w, self.view_height
+        if w < 20 or len(self.buf) < 2: return
         self.delete("all")
-        mid = self.height // 2
-        step = self.width / max(1, len(self.buffer))
-        pts = []
-        x = 0
-        for v in self.buffer:
-            y = mid - v * (self.height * 0.42)
-            pts.append((x, y))
-            x += step
+        mid = h // 2
+        step = w / len(self.buf)
+        pts = [(i * step, mid - v * (h * 0.42)) for i, v in enumerate(self.buf)]
+        
+        # 3 Layers of Blue
+        for i in range(3):
+            col = lerp_color(BG_MAIN, CYAN_PRIMARY, 0.4 - i*0.1)
+            self.create_line(pts, fill=col, width=5-i*2, smooth=True)
+        self.create_line(pts, fill=CYAN_PRIMARY, width=1, smooth=True)
 
-        # glow layers
-        for i in range(4):
-            t = i / 3
-            col = lerp_color(CYAN_SOFT, BG_MAIN, 0.6 * t)
-            width = 6 - i
-            for j in range(len(pts) - 1):
-                x1, y1 = pts[j]
-                x2, y2 = pts[j + 1]
-                self.create_line(x1, y1, x2, y2, fill=col, width=width, smooth=True)
-
-        # core line
-        for j in range(len(pts) - 1):
-            x1, y1 = pts[j]
-            x2, y2 = pts[j + 1]
-            self.create_line(x1, y1, x2, y2, fill=CYAN_PRIMARY, width=2, smooth=True)
-
-# ==========================
-# Main UI (borderless + slide + glow)
-# ==========================
+# ── Main UI v6 ─────────────────────────────────────────────────────────────────
 class AssistantUI:
     def __init__(self, root: tk.Tk, on_submit, title="AURIS", on_force_stop=None):
-        self.root = root
-        self.on_submit = on_submit
-        self.on_force_stop = on_force_stop or (lambda: None)
+        self.root          = root
+        self._on_submit_cb = on_submit
+        self._on_stop_cb   = on_force_stop or (lambda: None)
+        self._drag_offset  = None
+        self._bubbles      = []
+        self._placeholder  = "Type command..."
+        self._ph_color     = CYAN_DIM
 
-        # remove title bar and initial geometry (slide from top)
-        root.overrideredirect(True)
-        
+        root.title(title)
         root.configure(bg=BG_MAIN)
+        root.resizable(True, True)
+        root.minsize(360, 560)
 
-        self.w = 390
-        self.h = 667
-        sw = root.winfo_screenwidth()
-        sh = root.winfo_screenheight()
-        self.final_x = (sw - self.w) // 2
-        self.final_y = int(sh * 0.12)
-        self.start_y = -self.h - 40
-        root.geometry(f"{self.w}x{self.h}+{self.final_x}+{self.start_y}")
+        sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+        w0, h0 = 420, 720
+        root.geometry(f"{w0}x{h0}+{(sw-w0)//2}+{int(sh*0.08)}")
 
-        # custom drag
-        root.bind("<ButtonPress-1>", self._drag_start)
-        root.bind("<B1-Motion>", self._drag_move)
+        self.main_container = tk.Frame(self.root, bg=BG_MAIN)
+        self.main_container.pack(fill="both", expand=True)
 
-        # build layout
         self._build_layout(title)
-
-        # slide-in animation params
-        self._slide_step = 0
-        self._slide_steps = 18
-        self._slide_in()
+        self._set_input_state("disabled")
 
     def _build_layout(self, title):
-        # outer canvas for glow border
-        self.canvas_outer = tk.Canvas(self.root, bg=BG_MAIN, highlightthickness=0)
-        self.canvas_outer.pack(fill="both", expand=True)
-        self._draw_glow_border()
+        # ── Header ────────────────────────────────────────────────────────────
+        hdr = tk.Frame(self.main_container, bg=BG_MAIN, pady=15, padx=15)
+        hdr.pack(side="top", fill="x")
 
-        pad = 12
-        inner = tk.Frame(self.canvas_outer, bg=BG_MAIN)
-        inner.place(x=pad, y=pad, width=self.w - pad*2, height=self.h - pad*2)
+        # Blue dot
+        self._dot = tk.Canvas(hdr, width=14, height=14, bg=BG_MAIN, highlightthickness=0)
+        self._dot.pack(side="left", padx=(0, 10))
+        self._dot_id = self._dot.create_oval(2, 2, 12, 12, fill=CYAN_PRIMARY, outline="")
 
-        # Custom Layout Packing Order:
-        # 1. Input Row (Bottom)
-        # 2. EKG (Bottom, above input)
-        # 3. Header (Top)
-        # 4. Avatar (Top)
-        # 5. Wrapper (Fill Remaining)
+        tk.Label(hdr, text=title.upper(), fg=CYAN_PRIMARY, bg=BG_MAIN,
+                 font=("Segoe UI", 20, "bold")).pack(side="left")
 
-        # input row
-        input_row = tk.Frame(inner, bg=BG_MAIN)
-        input_row.pack(side="bottom", fill="x", padx=8, pady=(4,10))
+        self.status_var = tk.StringVar(value="● Listening")
+        tk.Label(hdr, textvariable=self.status_var, fg=CYAN_PRIMARY, bg=BG_MAIN,
+                 font=("Segoe UI", 12)).pack(side="right", padx=(0, 20))
 
-        self.entry = tk.Entry(input_row, bg="#001A2C", fg="white", relief="flat", insertbackground="white",
-                              font=("Segoe UI", 11))
-        self.entry.pack(side="left", fill="x", expand=True, ipady=8, padx=(0,8))
-        self.entry.bind("<Return>", lambda e: self._submit())
-        
-        # Placeholder text logic
-        def on_entry_click(event):
-            if self.entry.get() == "Type a command...":
-                self.entry.delete(0, "end")
-                self.entry.config(fg="white")
+        # Close button X
+        btn_close = tk.Button(hdr, text="✕", bg=BTN_RED, fg="white", relief="flat",
+                              font=("Segoe UI", 12, "bold"), command=self.root.destroy, padx=10)
+        btn_close.pack(side="right")
 
-        def on_focusout(event):
-            if self.entry.get() == "":
-                self.entry.insert(0, "Type a command...")
-                self.entry.config(fg="grey")
+        hdr.bind("<ButtonPress-1>", self._drag_start)
+        hdr.bind("<B1-Motion>",     self._drag_move)
 
-        self.entry.insert(0, "Type a command...")
-        self.entry.config(fg="grey")
-        self.entry.bind('<FocusIn>', on_entry_click)
-        self.entry.bind('<FocusOut>', on_focusout)
+        # ── Middle ────────────────────────────────────────────────────────────
+        self.avatar = AvatarWidget(self.main_container, size=110)
+        self.avatar.pack(side="top", pady=15)
 
-        tk.Button(input_row, text="Send", bg=CYAN_PRIMARY, fg="black", relief="flat",
-                  font=("Segoe UI", 10, "bold"), command=self._submit).pack(side="left", ipadx=12, ipady=6)
-        tk.Button(input_row, text="✖", bg="#7A2222", fg="white", relief="flat", command=self._force_stop).pack(side="left", padx=(8,0), ipadx=6, ipady=6)
+        chat_wrap = tk.Frame(self.main_container, bg=BG_MAIN)
+        chat_wrap.pack(side="top", fill="both", expand=True, padx=10)
 
-        # EKG mic widget (above input)
-        self.ekg = EKGWidget(inner, width=self.w - 64, height=68)
-        self.ekg.pack(side="bottom", pady=(6,8))
-
-        # header (top)
-        header = tk.Frame(inner, bg=BG_MAIN)
-        header.pack(side="top", fill="x", pady=(6,4), padx=8)
-        tk.Label(header, text=f"● {title}", fg=CYAN_PRIMARY, bg=BG_MAIN,
-                 font=("Segoe UI", 18, "bold")).pack(side="left")
-        self.status_var = tk.StringVar(value="Idle")
-        tk.Label(header, textvariable=self.status_var, fg=CYAN_MED, bg=BG_MAIN,
-                 font=("Segoe UI", 10)).pack(side="right")
-        tk.Button(header, text="✖", bg="#5A1A1A", fg="white", relief="flat", command=self.root.destroy).pack(side="right", padx=6)
-
-        # avatar
-        self.avatar = AvatarWidget(inner, size=160)
-        self.avatar.pack(side="top", pady=(4,6))
-
-        # chat area (fill remaining)
-        wrapper = tk.Frame(inner, bg=BG_MAIN)
-        wrapper.pack(side="top", fill="both", expand=True, padx=8, pady=(4,6))
-
-        self.canvas = tk.Canvas(wrapper, bg=BG_MAIN, highlightthickness=0)
+        self.canvas = tk.Canvas(chat_wrap, bg=BG_MAIN, highlightthickness=0)
         self.canvas.pack(side="left", fill="both", expand=True)
 
-        scrollbar = tk.Scrollbar(wrapper, command=self.canvas.yview)
-        scrollbar.pack(side="right", fill="y")
-        self.canvas.configure(yscrollcommand=scrollbar.set)
+        sb = tk.Scrollbar(chat_wrap, orient="vertical", command=self.canvas.yview, width=4)
+        sb.pack(side="right", fill="y")
+        self.canvas.configure(yscrollcommand=sb.set)
 
         self.msg_container = tk.Frame(self.canvas, bg=BG_MAIN)
-        self.msg_window = self.canvas.create_window((0,0), window=self.msg_container, anchor="nw")
+        self._msg_win = self.canvas.create_window((0, 0), window=self.msg_container, anchor="nw")
 
-        # Auto-resize chat width
-        self.canvas.bind("<Configure>",
-                        lambda e: self.canvas.itemconfig(self.msg_window, width=e.width))
-
-        self.msg_container.configure(padx=6)
-
+        self.canvas.bind("<Configure>", self._on_chat_resize)
         self.msg_container.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
-        
-        # Mousewheel scrolling (Windows)
-        self.root.bind("<MouseWheel>", self._on_mousewheel)
 
-    def _on_mousewheel(self, event):
-        self.canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        # ── Footer ────────────────────────────────────────────────────────────
+        footer = tk.Frame(self.main_container, bg=BG_MAIN, padx=15, pady=15)
+        footer.pack(side="bottom", fill="x")
 
-    def _draw_glow_border(self):
-        self.canvas_outer.delete("all")
-        pads = 12
-        layers = 8
-        for i in range(layers):
-            t = i / (layers - 1)
-            col = lerp_color(CYAN_PRIMARY, BG_MAIN, 0.55 + 0.45 * t)
-            offset = i * 2
-            x1 = pads - offset
-            y1 = pads - offset
-            x2 = self.w - pads + offset
-            y2 = self.h - pads + offset
-            # simple rectangle outline (no joinstyle)
-            self.canvas_outer.create_rectangle(x1, y1, x2, y2, outline=col)
+        self.ekg = EKGWidget(footer, height=44)
+        self.ekg.pack(side="top", fill="x", pady=(0, 15))
 
-    def _slide_in(self):
-        self._slide_step += 1
-        t = self._slide_step / self._slide_steps
-        ease = 1 - (1 - t) ** 3
-        y = int(self.start_y + (self.final_y - self.start_y) * ease)
-        self.root.geometry(f"{self.w}x{self.h}+{self.final_x}+{y}")
-        if self._slide_step < self._slide_steps:
-            self.root.after(16, self._slide_in)
-        else:
-            self.root.geometry(f"{self.w}x{self.h}+{self.final_x}+{self.final_y}")
+        inp_row = tk.Frame(footer, bg=BG_MAIN)
+        inp_row.pack(side="top", fill="x")
 
-    # ========================
-    # Public API (compatible + THREAD SAFE)
-    # ========================
-    def append(self, text, is_torque=False, is_system=False):
-        # We wrap the actual widget creation in lambda for thread safety
-        def _do_append():
-            sender = "system" if is_system else ("torque" if is_torque else "user")
-            b = ChatBubble(self.msg_container, text, sender, bounce=True, icon_robot_style=1, icon_user_style='B')
-            b.pack(fill="x")
-            # scroll to bottom shortly after
-            self.root.after(30, lambda: self.canvas.yview_moveto(1.0))
+        self.entry = tk.Entry(inp_row, bg="#001828", fg="white", relief="flat",
+                              insertbackground="white", font=("Segoe UI", 11))
+        self.entry.pack(side="left", fill="x", expand=True, ipady=12, padx=(0, 10))
+        self.entry.bind("<Return>", lambda e: self._submit())
+        self.entry.bind("<FocusIn>", self._ph_in)
+        self.entry.bind("<FocusOut>", self._ph_out)
+        self.entry.insert(0, self._placeholder)
+        self.entry.config(fg=self._ph_color)
 
-        self.root.after(0, _do_append)
+        self.send_btn = tk.Button(inp_row, text="Send", bg=BTN_CYAN, fg="black",
+                                  font=("Segoe UI", 11, "bold"), relief="flat",
+                                  padx=20, pady=8, command=self._submit)
+        self.send_btn.pack(side="left", padx=(0, 10))
 
-    def set_status(self, txt):
-        def _do_status():
-            try:
-                self.status_var.set(txt)
-            except Exception:
-                pass
-        self.root.after(0, _do_status)
+        self.stop_btn = tk.Button(inp_row, text="✕", bg=BTN_RED, fg="white",
+                                  font=("Segoe UI", 12, "bold"), relief="flat",
+                                  padx=15, pady=8, command=self._force_stop)
+        self.stop_btn.pack(side="left")
 
-    def set_listening(self, v: bool):
-        # thread safe wrapper
-        def _do_list():
-            self.set_status("● Listening" if v else "● Idle")
-        self.root.after(0, _do_list)
+    def _on_chat_resize(self, event):
+        self.canvas.itemconfig(self._msg_win, width=event.width)
+        for b in self._bubbles:
+            try: b.update_wraplength(event.width)
+            except: pass
 
-    def set_speaking(self, v: bool):
-        def _do_speak():
-            self.avatar.set_speaking(bool(v))
-            if v:
-                self.set_status("● Speaking")
-            else:
-                self.set_status("● Idle")
-        self.root.after(0, _do_speak)
-
-    def set_caption(self, text: str):
-        pass
-
-    def update_mic_level(self, level):
-        def _do_level():
-            try:
-                if isinstance(level, float) and 0.0 <= level <= 1.0:
-                    lvl = level
-                else:
-                    lvl = float(level) / 100.0
-                lvl = max(0.0, min(1.0, lvl))
-            except Exception:
-                lvl = 0.0
-            self.ekg.update_level(lvl)
-        self.root.after(0, _do_level)
-
-    # ========================
-    # Input handlers
-    # ========================
-    def _submit(self):
-        t = self.entry.get().strip()
-        if not t or t == "Type a command...":
-            return
-        self.append(t, is_torque=False)
-        self.entry.delete(0, "end")
-        
-        # Run processing in a thread to avoid freezing UI
-        def _process():
-            try:
-                self.on_submit(t)
-            except Exception as e:
-                self.append(f"[Error] {e}", is_system=True)
-        
-        import threading
-        threading.Thread(target=_process, daemon=True).start()
-
-    def _force_stop(self):
-        self.append("Force stopping session.", is_system=True)
-        try:
-            self.on_force_stop()
-        except Exception as e:
-            self.append(str(e), is_system=True)
-
-    # ========================
-    # Window dragging
-    # ========================
     def _drag_start(self, event):
         self._drag_offset = (event.x_root - self.root.winfo_x(), event.y_root - self.root.winfo_y())
 
     def _drag_move(self, event):
-        if not hasattr(self, "_drag_offset") or self._drag_offset is None:
-            return
-        x = event.x_root - self._drag_offset[0]
-        y = event.y_root - self._drag_offset[1]
-        self.root.geometry(f"+{x}+{y}")
+        if self._drag_offset:
+            self.root.geometry(f"+{event.x_root - self._drag_offset[0]}+{event.y_root - self._drag_offset[1]}")
+
+    # ── API ─────────────────────────────────────────────────────────────────────
+    def append(self, text, is_torque=False, is_system=False):
+        def _do():
+            sender = "system" if is_system else "torque" if is_torque else "user"
+            cw = max(200, self.canvas.winfo_width())
+            b = ChatBubble(self.msg_container, text, sender, wrap=int(cw*0.58))
+            b.pack(fill="x")
+            self._bubbles.append(b)
+            if len(self._bubbles) > 100: self._bubbles.pop(0).destroy()
+            self.canvas.after(50, lambda: self.canvas.yview_moveto(1.0))
+        self.root.after(0, _do)
+
+    def set_status(self, txt):
+        self.root.after(0, lambda: self.status_var.set(f"● {txt}"))
+
+    def set_listening(self, v: bool):
+        def _do():
+            self._dot.itemconfig(self._dot_id, fill=CYAN_PRIMARY if v else CYAN_DIM)
+            self.status_var.set("● Listening" if v else "● Idle")
+        self.root.after(0, _do)
+
+    def set_speaking(self, v: bool):
+        def _do():
+            self.avatar.set_speaking(v)
+            self.status_var.set("● Speaking" if v else "● Idle")
+        self.root.after(0, _do)
+
+    def update_mic_level(self, level):
+        self.root.after(0, lambda: self.ekg.update_level(level))
+
+    def set_text_input_locked(self, locked: bool, hint: str = None):
+        def _do():
+            self._set_input_state("disabled" if locked else "normal")
+        self.root.after(0, _do)
+
+    def _set_input_state(self, state: str):
+        try:
+            self.entry.configure(state=state)
+            if state == "disabled":
+                self.entry.configure(bg="#001018", fg=CYAN_DIM)
+                self.send_btn.configure(state="disabled", bg="#002238")
+            else:
+                self.entry.configure(bg="#001828", fg="white")
+                self.send_btn.configure(state="normal", bg=BTN_CYAN)
+        except: pass
+
+    def _ph_in(self, _):
+        if self.entry.get() == self._placeholder:
+            self.entry.delete(0, "end")
+            self.entry.config(fg="white")
+
+    def _ph_out(self, _):
+        if not self.entry.get():
+            self.entry.insert(0, self._placeholder)
+            self.entry.config(fg=self._ph_color)
+
+    def _submit(self):
+        t = self.entry.get().strip()
+        if not t or t == self._placeholder: return
+        self.append(t, is_torque=False)
+        self.entry.delete(0, "end")
+        import threading
+        threading.Thread(target=lambda: self._on_submit_cb(t), daemon=True).start()
+
+    def _force_stop(self):
+        try: self._on_stop_cb()
+        except: pass

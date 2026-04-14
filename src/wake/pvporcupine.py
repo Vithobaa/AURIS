@@ -145,11 +145,12 @@ class WakeWordListener:
                                 except: pass
                                 
                     except Exception as e:
-                        print(f"[WAKE] Process error: {e}")
-                        break
+                        print(f"[WAKE] Process error (continuing): {e}")
+                        continue  # Don't kill the listener on transient errors
                         
         except Exception as e:
-            print("[WAKE] Stream error:", e)
+            print(f"[WAKE] Stream error (listener DIED): {e}")
         finally:
+            print("[WAKE] Listener thread exiting — mic will go dark.")
             porcupine.delete()
 
